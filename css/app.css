@@ -329,3 +329,77 @@ hr.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }
 .btn { white-space: nowrap; }
 .btn svg { width: 20px; height: 20px; flex: none; }
 .mode .badge, .btn .badge { margin-left: 4px; }
+.tree .subtree { display: grid; gap: 8px; padding: 0 10px 10px 18px; border-left: 3px solid var(--primary-soft); margin: 0 0 4px 22px; }
+.tree .subtree .fold { box-shadow: none; background: var(--surface-2); }
+
+/* ---------- v2.0: 별점 ---------- */
+.stars { color: #f5b301; letter-spacing: -1px; white-space: nowrap; font-size: 15px; }
+.stars .off { color: var(--line); }
+.stars.inh { opacity: .55; }
+.stars.none { color: var(--muted); letter-spacing: 0; font-size: 14px; }
+.stars.none small { margin-left: 2px; }
+.stars.lg { font-size: 20px; }
+.rate-btn { border: 0; background: transparent; cursor: pointer; padding: 6px 8px; border-radius: 8px; min-height: 40px; display: inline-flex; align-items: center; }
+.rate-btn:hover { background: var(--surface-2); }
+.rate-pick { display: grid; gap: 8px; }
+.rate-pick .btn { justify-content: flex-start; }
+.rate-pick .btn.primary .stars .off { color: rgba(255,255,255,.35); }
+.chip-r { min-width: 56px; justify-content: center; }
+
+/* ---------- v2.0: 사진 ---------- */
+.ph { margin: 0 0 12px; }
+.ph img { display: block; width: 100%; height: 100%; object-fit: contain; background: var(--surface-2); border-radius: 10px; cursor: zoom-in; }
+.ph img.ph-missing { min-height: 60px; }
+.ph1 img { max-height: 34vh; height: auto; }
+.ph-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.ph-grid img { height: 15vh; object-fit: cover; }
+.ph-g3 img:first-child { grid-column: 1 / span 2; height: 18vh; }
+.ph-strip-wrap { position: relative; }
+.ph-strip { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; gap: 6px; border-radius: 10px; scrollbar-width: thin; }
+.ph-strip img { flex: 0 0 100%; height: 30vh; scroll-snap-align: start; }
+.ph-count { position: absolute; right: 8px; top: 8px; background: rgba(0,0,0,.6); color: #fff; font-size: 13px; font-weight: 700; padding: 2px 8px; border-radius: 99px; pointer-events: none; }
+.ph-thumb { position: relative; width: 64px; height: 64px; flex: none; margin: 0; }
+.ph-thumb img { object-fit: cover; }
+.ph-badge { position: absolute; right: 2px; bottom: 2px; background: rgba(0,0,0,.65); color: #fff; font-size: 11px; font-weight: 700; padding: 0 5px; border-radius: 6px; pointer-events: none; }
+/* 낱말카드 면 안의 사진: 글자가 항상 보이도록 높이 제한 */
+.flip .face.has-ph { flex-direction: column; justify-content: flex-start; padding-top: 40px; }
+.flip .face.has-ph .ph { width: 100%; flex: 0 1 auto; max-height: 62%; overflow: hidden; }
+.flip .face.has-ph .ph1 img { max-height: 100%; height: auto; max-width: 100%; margin: 0 auto; }
+.flip .face.has-ph .ph-grid img { height: 13vh; }
+.flip .face.has-ph .ph-strip img { height: 26vh; }
+.flip .face.has-ph > .txt { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; width: 100%; }
+.qa .q .ph1 img { max-height: 38vh; }
+.term-row .a .ph-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+/* 편집기 사진 칸 */
+.ed-ph { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 0 16px 14px; }
+.ed-ph .t { position: relative; width: 72px; height: 72px; }
+.ed-ph .t img { width: 100%; height: 100%; object-fit: cover; border-radius: 8px; display: block; cursor: zoom-in; }
+.ed-ph .t button { position: absolute; top: -6px; right: -6px; width: 24px; height: 24px; border-radius: 50%; border: 0; background: var(--ng); color: #fff; font-weight: 800; cursor: pointer; line-height: 1; }
+.ed-ph .add { width: 72px; height: 72px; border-radius: 8px; border: 2px dashed var(--line); background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; font-weight: 700; }
+/* 전체화면 보기 */
+.viewer { position: fixed; inset: 0; z-index: 80; background: rgba(0,0,0,.94); display: flex; flex-direction: column; touch-action: none; user-select: none; }
+.vw-top { display: flex; justify-content: space-between; align-items: center; padding: calc(8px + env(safe-area-inset-top)) 12px 8px 18px; color: #fff; font-weight: 700; }
+.vw-btn { width: 44px; height: 44px; border-radius: 50%; border: 0; background: rgba(255,255,255,.12); color: #fff; font-size: 20px; cursor: pointer; }
+.vw-stage { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.vw-img { max-width: 100%; max-height: 100%; object-fit: contain; transition: transform .05s linear; will-change: transform; }
+.vw-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 52px; height: 72px; border: 0; background: rgba(255,255,255,.12); color: #fff; font-size: 34px; cursor: pointer; border-radius: 12px; }
+.vw-prev { left: 10px; } .vw-next { right: 10px; }
+@media (pointer: coarse) { .vw-nav { display: none; } }
+
+/* ---------- v2.0: 객관식 / 학습하기 ---------- */
+.mc-opts { display: grid; gap: 10px; margin-top: 16px; }
+.mc-opt { display: flex; gap: 12px; align-items: flex-start; text-align: left; padding: 14px 16px; border-radius: 12px; border: 2px solid var(--line); background: var(--surface); cursor: pointer; font-size: 16px; white-space: pre-wrap; word-break: keep-all; overflow-wrap: anywhere; color: var(--text); min-height: 56px; }
+.mc-opt:hover { border-color: var(--primary); }
+.mc-opt .no { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--surface-2); display: grid; place-items: center; font-weight: 800; font-size: 14px; }
+.mc-opt.right { border-color: var(--ok); background: var(--ok-soft); }
+.mc-opt.right .no { background: var(--ok); color: #fff; }
+.mc-opt.wrong { border-color: var(--ng); background: var(--ng-soft); }
+.mc-opt.wrong .no { background: var(--ng); color: #fff; }
+.mc-opt:disabled { cursor: default; opacity: 1; }
+.mc-opts.done .mc-opt:not(.right):not(.wrong) { opacity: .55; }
+.learn-bar { display: flex; gap: 6px; margin-bottom: 14px; }
+.learn-bar > div { flex: 1; text-align: center; background: var(--surface); border-radius: 10px; padding: 8px 4px; box-shadow: var(--shadow); }
+.learn-bar b { display: block; font-size: 20px; }
+.learn-bar span { font-size: 12px; color: var(--muted); font-weight: 700; }
+.mt.mt-ph { flex-direction: column; gap: 6px; padding: 6px; }
+.mt.mt-ph img { width: 100%; height: 78px; object-fit: cover; border-radius: 8px; pointer-events: none; }
