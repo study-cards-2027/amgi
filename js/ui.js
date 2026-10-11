@@ -111,3 +111,24 @@ export function download(filename, text, type = 'application/json') {
 export function readFile(file) {
   return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsText(file, 'utf-8'); });
 }
+
+// ---------- 별점 (v2.0) ----------
+// v: null(없음) 또는 0~5. inherited: 단원·폴더에서 물려받은 별점이면 흐리게
+export function starsHTML(v, inherited = false, size = '') {
+  if (v === null || v === undefined) return `<span class="stars none ${size}" title="별점 없음">☆<small>없음</small></span>`;
+  return `<span class="stars ${inherited ? 'inh' : ''} ${size}" title="${inherited ? '물려받은 별점 ' : '별점 '}${v}개">${'★'.repeat(v)}<span class="off">${'★'.repeat(5 - v)}</span></span>`;
+}
+// 별점 고르기 창. 결과: 0~5 | null(없음) | undefined(취소)
+export function pickRating(title, current, { inheritNote = '' } = {}) {
+  return new Promise((resolve) => {
+    let done = false;
+    modal(`<h3>${esc(title)}</h3>
+      <div class="rate-pick">${[5, 4, 3, 2, 1, 0].map((n) => `<button class="btn block ${current === n ? 'primary' : ''}" data-r="${n}">${starsHTML(n)} <span class="small">${n}개</span></button>`).join('')}
+      <button class="btn block ghost ${current === null || current === undefined ? 'primary' : ''}" data-r="none">별점 없음${inheritNote ? ` <span class="small muted">(${esc(inheritNote)})</span>` : ''}</button></div>
+      <div class="row end"><button class="btn ghost" data-x>취소</button></div>`,
+    (m, close) => {
+      $$('[data-r]', m).forEach((b) => (b.onclick = () => { done = true; close(); resolve(b.dataset.r === 'none' ? null : +b.dataset.r); }));
+      $('[data-x]', m).onclick = () => close();
+    }).then(() => { if (!done) resolve(undefined); });
+  });
+}

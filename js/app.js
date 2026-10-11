@@ -1,6 +1,7 @@
 import * as st from './store.js';
 import * as study from './study.js';
-import { $, $$, esc, I, toast, ask, confirmBox, modal, menu, fmtDate, autoGrow, download, readFile } from './ui.js';
+import { $, $$, esc, I, toast, ask, confirmBox, modal, menu, fmtDate, autoGrow, download, readFile, starsHTML, pickRating } from './ui.js';
+import { photoBlock, hydrate, fileToStoredImage, openViewer } from './media.js';
 
 const view = () => $('#view');
 const go = (h) => { if (location.hash === h) route(); else location.hash = h; };
@@ -51,12 +52,58 @@ function acc(cards) {
   return { ok, ng, n: ok + ng, pct: ok + ng ? Math.round((ok / (ok + ng)) * 100) : null };
 }
 export function scopeLabel(setIds) {
-  const by = new Map();
-  for (const id of setIds) { const s = st.S.sets[id]; if (!s) continue; const f = st.S.folders[s.folderId]; if (!by.has(f)) by.set(f, []); by.get(f).push(s); }
-  return [...by.entries()].map(([f, sets]) => {
-    const all = st.setsOf(f.id).length === sets.length;
-    return all ? `${f.name} 전체` : `${f.name} ${sets.sort((x, y) => (x.order ?? 0) - (y.order ?? 0)).map((s) => s.name).join('·')}`;
-  }).join(', ') || '선택 없음';
+  const sel = new Set(setIds);
+  const parts = [];
+  const walk = (fid) => {
+    const under = st.setsUnder(fid);
+    const k = under.filter((x) => sel.has(x.id)).length;
+    if (!k) return;
+    if (k === under.length) { parts.push(`${st.S.folders[fid].name} 전체`); return; }
+    const own = st.setsOf(fid).filter((x) => sel.has(x.id));
+    if (own.length) parts.push(`${st.S.folders[fid].name} ${own.map((x) => x.name).join('·')}`);
+    st.subfolders(fid).forEach((sf) => walk(sf.id));
+  };
+  st.folders().forEach((f) => walk(f.id));
+  return parts.join(', ') || '선택 없음';
+}
+function crumbs(fid, last = false) {
+  const path = st.folderPath(fid);
+  return `<div class="crumb"><a href="#/">홈</a>${path.slice(0, last ? path.length : path.length - 1).map((f) => ` › <a href="#/f/${f.id}">${esc(f.name)}</a>`).join('')}</div>`;
+}
+function folderStats(fid) {
+  const ss = st.setsUnder(fid); const cs = ss.flatMap((x) => st.cardsOf(x.id));
+  return { subs: st.subfolders(fid).length, sets: ss.length, cards: cs.length, wrong: cs.filter((c) => c.p?.wrong).length, cs };
+}
+function folderTile(f) {
+  const t = folderStats(f.id);
+  return `<a class="tile" href="#/f/${f.id}"><div class="row"><span style="color:var(--primary);display:inline-flex;width:22px">${I.folder}</span><span class="t">${esc(f.name)}</span><span class="spacer"></span>${f.rating !== undefined && f.rating !== null ? starsHTML(f.rating) : ''}${t.wrong ? `<span class="pill ng">오답 ${t.wrong}</span>` : ''}</div>
+    <div class="s">${t.subs ? `하위 폴더 ${t.subs}개 · ` : ''}단원 ${t.sets}개 · 카드 ${t.cards}장</div></a>`;
+}
+// 폴더 선택 창 (옮기기용). excludeId와 그 하위는 고를 수 없음.
+function pickFolder(title, { excludeId = null, currentId, allowRoot = false } = {}) {
+  const tree = st.folderTree().filter(({ f }) => !(excludeId && (f.id === excludeId || st.isDescendant(f.id, excludeId))));
+  return modal(`<h3>${esc(title)}</h3><div class="list" style="gap:8px">
+    ${allowRoot ? `<button class="btn block" data-f="__root" style="justify-content:flex-start" ${!currentId ? 'disabled' : ''}>🏠 홈 (최상위)</button>` : ''}
+    ${tree.map(({ f, depth }) => `<button class="btn block" data-f="${f.id}" style="justify-content:flex-start;padding-left:${14 + depth * 22}px" ${f.id === currentId ? 'disabled' : ''}>${depth ? '└ ' : ''}${esc(f.name)}</button>`).join('')}
+    </div><div class="row end"><button class="btn ghost" data-x>취소</button></div>`, (m, close) => {
+    $$('[data-f]', m).forEach((b) => (b.onclick = () => close(b.dataset.f))); $('[data-x]', m).onclick = () => close(null);
+  });
+}
+// 폴더·단원 별점: 안의 카드 중 자기 별점이 없는 카드가 이 별점을 물려받는다
+function ratingNote(kind, o) {
+  let inh = null;
+  if (kind === 'folder') inh = st.folderInherited(o.id);
+  else { const p = st.folderPath(o.folderId).reverse().find((x) => x.rating !== undefined && x.rating !== null); if (p) inh = { v: p.rating, name: p.name }; }
+  return inh ? `물려받기: ${inh.name} ★${inh.v}` : '';
+}
+function ratingHeadBtn(kind, o) {
+  const has = o.rating !== undefined && o.rating !== null;
+  return `<button class="rate-btn" id="headRate" title="${kind === 'folder' ? '폴더' : '단원'} 별점">${has ? starsHTML(o.rating, false, 'lg') : '<span class="stars none">☆<small>별점</small></span>'}</button>`;
+}
+async function askHeadRating(kind, o) {
+  const v = await pickRating(`${kind === 'folder' ? '폴더' : '단원'} 별점 — 안의 카드 중 별점이 없는 카드가 물려받아요`, o.rating ?? null, { inheritNote: ratingNote(kind, o) });
+  if (v === undefined) return;
+  st.setRating(kind, o.id, v); route();
 }
 function backupBanner() {
   const n = st.allCards().length; if (!n) return '';
@@ -82,43 +129,59 @@ function home() {
     <a class="stat" href="#/stats"><div class="n">${all.length}</div><div class="l">전체 카드</div></a>
   </div>
   ${backupBanner()}
-  <div class="row" style="margin-top:22px"><h2 style="margin:0">과목</h2><span class="spacer"></span>
+  <div class="row" style="margin-top:22px"><h2 style="margin:0">폴더</h2><span class="spacer"></span>
     <a class="btn sm" href="#/import">${I.import} 가져오기</a>
-    <button class="btn sm primary" id="addF">${I.plus} 과목</button></div>
-  <div class="grid2" style="margin-top:12px">
-    ${fs.map((f) => { const ss = st.setsOf(f.id); const cs = ss.flatMap((s) => st.cardsOf(s.id)); const w = cs.filter((c) => c.p?.wrong).length;
-      return `<a class="tile" href="#/f/${f.id}"><div class="row"><span class="t">${esc(f.name)}</span><span class="spacer"></span>${w ? `<span class="pill ng">오답 ${w}</span>` : ''}</div>
-      <div class="s">단원 ${ss.length}개 · 카드 ${cs.length}장</div></a>`; }).join('')}
-  </div>
-  ${fs.length ? '' : `<div class="empty"><div class="big">📚</div><p>아직 과목이 없어요.<br>「+ 과목」으로 상한론, 본초학 같은 과목을 만들어 보세요.</p></div>`}`;
-  $('#addF').onclick = async () => { const n = await ask('새 과목', '', '예: 상한론'); if (n) { const f = st.addFolder(n); go('#/f/' + f.id); } };
+    <button class="btn sm primary" id="addF">${I.plus} 폴더</button></div>
+  <div class="grid2" style="margin-top:12px">${fs.map(folderTile).join('')}</div>
+  ${fs.length ? '' : `<div class="empty"><div class="big">📚</div><p>아직 폴더가 없어요.<br>「+ 폴더」로 상한론, 본초학 같은 과목 폴더를 만들어 보세요.</p></div>`}`;
+  $('#addF').onclick = async () => { const n = await ask('새 폴더', '', '예: 상한론'); if (n) { const f = st.addFolder(n); go('#/f/' + f.id); } };
 }
 
-// ================================================================ 과목
+// ================================================================ 폴더 (하위 폴더 + 단원)
 function folderView(fid) {
-  const f = st.S.folders[fid]; if (!f || f.del) return go('#/');
+  const f = st.S.folders[fid]; if (!f || f.del || !st.folderAlive(fid)) return go('#/');
+  const subs = st.subfolders(fid);
   const ss = st.setsOf(fid);
+  const t = folderStats(fid);
+  const parentHref = f.parentId ? `#/f/${f.parentId}` : '#/';
   view().innerHTML = `
-  <div class="crumb"><a href="#/">홈</a></div>
-  <div class="topbar"><div><h1>${esc(f.name)}</h1><div class="muted">단원 ${ss.length}개 · 카드 ${ss.reduce((n, s) => n + st.cardsOf(s.id).length, 0)}장</div></div>
-    <span class="spacer"></span><div><button class="icon-btn" id="more">${I.more}</button></div></div>
+  ${crumbs(fid)}
+  <div class="topbar"><div><h1>${esc(f.name)}</h1><div class="muted">${t.subs ? `하위 폴더 ${t.subs}개 · ` : ''}단원 ${t.sets}개 · 카드 ${t.cards}장</div></div>
+    <span class="spacer"></span>${ratingHeadBtn('folder', f)}<div><button class="icon-btn" id="more">${I.more}</button></div></div>
   <div class="row">
-    <a class="btn primary" href="#/study?mode=test&folder=${fid}">${I.test} 범위 골라 시험</a>
-    <a class="btn" href="#/study?mode=flash&folder=${fid}">${I.cards} 낱말카드</a>
+    ${t.cards ? `<a class="btn primary" href="#/study?mode=test&folder=${fid}">${I.test} 범위 골라 시험</a>
+    <a class="btn" href="#/study?mode=flash&folder=${fid}">${I.cards} 낱말카드</a>` : ''}
+    <button class="btn" id="addSub">${I.folder} 하위 폴더</button>
     <button class="btn" id="addS">${I.plus} 단원</button>
   </div>
-  <div class="list" style="margin-top:16px">
+  ${subs.length ? `<h2>폴더</h2><div class="grid2">${subs.map(folderTile).join('')}</div>` : ''}
+  ${ss.length ? `${subs.length ? '<h2>단원</h2>' : ''}<div class="list" style="margin-top:${subs.length ? 0 : 16}px">
     ${ss.map((s) => { const cs = st.cardsOf(s.id); const a = acc(cs); const w = cs.filter((c) => c.p?.wrong).length;
-      return `<a class="tile" href="#/s/${s.id}"><div class="row"><span class="t">${esc(s.name)}</span><span class="spacer"></span>${w ? `<span class="pill ng">오답 ${w}</span>` : ''}${a.pct !== null ? `<span class="pill ${a.pct >= 80 ? 'ok' : ''}">정답률 ${a.pct}%</span>` : ''}</div>
+      return `<a class="tile" href="#/s/${s.id}"><div class="row"><span class="t">${esc(s.name)}</span><span class="spacer"></span>${s.rating !== undefined && s.rating !== null ? starsHTML(s.rating) : ''}${w ? `<span class="pill ng">오답 ${w}</span>` : ''}${a.pct !== null ? `<span class="pill ${a.pct >= 80 ? 'ok' : ''}">정답률 ${a.pct}%</span>` : ''}</div>
       <div class="s">카드 ${cs.length}장</div></a>`; }).join('')}
-  </div>
-  ${ss.length ? '' : `<div class="empty"><div class="big">🗂️</div><p>「+ 단원」으로 1단원, 2단원 등을 만들어 보세요.</p></div>`}`;
+  </div>` : ''}
+  ${ss.length || subs.length ? '' : `<div class="empty"><div class="big">🗂️</div><p>「+ 단원」으로 1단원, 2단원 등을 만들거나<br>「하위 폴더」로 폴더를 한 단계 더 나눠 보세요.</p></div>`}`;
   $('#addS').onclick = async () => { const n = await ask('새 단원', '', `예: ${ss.length + 1}단원`); if (n) { const s = st.addSet(fid, n); go('#/s/' + s.id); } };
+  $('#headRate').onclick = () => askHeadRating('folder', f);
+  $('#addSub').onclick = async () => { const n = await ask(`'${f.name}' 안에 새 폴더`, '', '예: 상한 무조건법'); if (n) { const nf = st.addFolder(n, fid); go('#/f/' + nf.id); } };
   $('#more').onclick = (e) => menu(e.currentTarget, [
-    { label: '과목 이름 바꾸기', run: async () => { const n = await ask('과목 이름', f.name); if (n) { st.rename('folder', fid, n); route(); } } },
+    { label: '폴더 이름 바꾸기', run: async () => { const n = await ask('폴더 이름', f.name); if (n) { st.rename('folder', fid, n); route(); } } },
+    { label: '폴더 별점 매기기', run: () => askHeadRating('folder', f) },
+    { label: '다른 폴더 안으로 옮기기', run: async () => {
+      const to = await pickFolder(`'${f.name}'을(를) 어디로 옮길까요?`, { excludeId: fid, currentId: f.parentId || null, allowRoot: true });
+      if (!to) return;
+      st.moveFolder(fid, to === '__root' ? null : to); toast('옮겼어요'); route();
+    } },
+    { label: '새 상위 폴더로 묶기', run: async () => {
+      const n = await ask(`'${f.name}'을(를) 담을 새 폴더 이름`, '', '예: 상한론', '만들기');
+      if (!n) return;
+      const parent = st.addFolder(n, f.parentId || null);
+      parent.order = f.order ?? 0;
+      st.moveFolder(fid, parent.id); toast(`'${n}' 폴더 안으로 넣었어요`); go('#/f/' + parent.id);
+    } },
     { label: '위로 이동', run: () => { st.moveOrder('folder', fid, -1); toast('순서를 바꿨어요'); } },
     { label: '아래로 이동', run: () => { st.moveOrder('folder', fid, 1); toast('순서를 바꿨어요'); } },
-    { label: '과목 삭제', danger: true, run: async () => { if (await confirmBox(`'${f.name}' 과목을 삭제할까요?`, '안의 단원과 카드도 모두 삭제됩니다.', '삭제', true)) { st.deleteFolder(fid); go('#/'); } } },
+    { label: '폴더 삭제', danger: true, run: async () => { if (await confirmBox(`'${f.name}' 폴더를 삭제할까요?`, `안의 하위 폴더, 단원, 카드 ${t.cards}장이 모두 삭제됩니다.`, '삭제', true)) { st.deleteFolder(fid); go(parentHref); } } },
   ]);
 }
 
@@ -126,56 +189,65 @@ function folderView(fid) {
 function setView(sid, q = {}) {
   const s = st.S.sets[sid]; if (!s || s.del) return go('#/');
   const f = st.S.folders[s.folderId];
-  const filter = q.v || 'all';
+  const filter = q.v === 'wrong' ? 'wrong' : 'all';
+  const rf = q.r ?? '';
   const all = st.cardsOf(sid);
-  const cs = filter === 'star' ? all.filter((c) => c.star) : filter === 'wrong' ? all.filter((c) => c.p?.wrong) : all;
+  let cs = filter === 'wrong' ? all.filter((c) => c.p?.wrong) : all;
+  if (rf !== '') cs = cs.filter((c) => st.ratingOk(c, new Set([rf === 'none' ? 'none' : +rf])));
+  const qs = (v, r) => { const p = new URLSearchParams(); if (v === 'wrong') p.set('v', 'wrong'); if (r !== '') p.set('r', r); const t = p.toString(); return `#/s/${sid}${t ? '?' + t : ''}`; };
   const a = acc(all);
   view().innerHTML = `
-  <div class="crumb"><a href="#/">홈</a> › <a href="#/f/${f.id}">${esc(f.name)}</a></div>
+  ${crumbs(f.id, true)}
   <div class="topbar"><div><h1>${esc(s.name)}</h1><div class="muted">카드 ${all.length}장${a.pct !== null ? ` · 정답률 ${a.pct}%` : ''}</div></div>
-    <span class="spacer"></span><div><button class="icon-btn" id="more">${I.more}</button></div></div>
+    <span class="spacer"></span>${ratingHeadBtn('set', s)}<div><button class="icon-btn" id="more">${I.more}</button></div></div>
   <div class="modes">
     <button class="mode" data-m="flash">${I.cards}낱말카드</button>
     <button class="mode" data-m="test">${I.test}테스트</button>
     <button class="mode" data-m="match">${I.match}매칭</button>
     <button class="mode" data-m="review">${I.review}복습</button>
+    <button class="mode" data-m="mc">${I.test}객관식</button>
+    <button class="mode" data-m="learn">${I.flip}학습하기</button>
   </div>
   <div class="row" style="margin-top:18px">
-    <div class="seg" id="vf"><button data-v="all" class="${filter === 'all' ? 'on' : ''}">전체 ${all.length}</button><button data-v="star" class="${filter === 'star' ? 'on' : ''}">별표 ${all.filter((c) => c.star).length}</button><button data-v="wrong" class="${filter === 'wrong' ? 'on' : ''}">오답 ${all.filter((c) => c.p?.wrong).length}</button></div>
+    <div class="seg" id="vf"><button data-v="all" class="${filter === 'all' ? 'on' : ''}">전체 ${all.length}</button><button data-v="wrong" class="${filter === 'wrong' ? 'on' : ''}">오답 ${all.filter((c) => c.p?.wrong).length}</button></div>
+    <select class="input" id="rf" style="width:auto;min-height:40px;padding:6px 10px"><option value="">별점: 전체</option>${[5, 4, 3, 2, 1, 0].map((n) => `<option value="${n}" ${rf === String(n) ? 'selected' : ''}>★ ${n}개 (${all.filter((c) => st.effRating(c).v === n).length})</option>`).join('')}<option value="none" ${rf === 'none' ? 'selected' : ''}>별점 없음 (${all.filter((c) => st.effRating(c).v === null).length})</option></select>
     <span class="spacer"></span>
     <a class="btn sm" href="#/import?set=${sid}">${I.import} 가져오기</a>
     <a class="btn sm primary" href="#/edit/${sid}">${I.edit} 카드 편집</a>
   </div>
   <div class="term-list" style="margin-top:12px">
-    ${cs.map((c) => `<div class="term-row ${c.p?.wrong ? 'wrong' : ''}"><div class="a">${esc(c.term)}</div><div class="b">${esc(c.def)}</div>
-      <div class="acts"><button class="icon-btn ${c.star ? 'star-on' : ''}" data-star="${c.id}" title="별표">${c.star ? I.starFill : I.star}</button>
-      <a class="icon-btn" href="#/edit/${sid}?focus=${c.id}" title="편집">${I.edit}</a></div></div>`).join('')}
+    ${cs.map((c) => { const r = st.effRating(c); return `<div class="term-row ${c.p?.wrong ? 'wrong' : ''}"><div class="a">${esc(c.term)}${(c.imgs || []).length ? `<div class="ph-row">${photoBlock(c.imgs, { compact: true })}<span class="small muted" style="align-self:center">사진 ${c.imgs.length}장</span></div>` : ''}</div><div class="b">${esc(c.def)}</div>
+      <div class="acts"><button class="rate-btn" data-rate="${c.id}" title="별점">${starsHTML(r.v, r.inherited)}</button>
+      <a class="icon-btn" href="#/edit/${sid}?focus=${c.id}" title="편집">${I.edit}</a></div></div>`; }).join('')}
   </div>
   ${all.length ? (cs.length ? '' : '<div class="empty">해당하는 카드가 없어요.</div>') : `<div class="empty"><div class="big">🃏</div><p>카드가 없어요.<br>「카드 편집」에서 직접 쓰거나, 「가져오기」로 엑셀 표를 붙여넣으세요.</p><a class="btn primary" href="#/edit/${sid}">카드 만들기</a></div>`}`;
-  $$('#vf button').forEach((b) => (b.onclick = () => go(`#/s/${sid}${b.dataset.v === 'all' ? '' : '?v=' + b.dataset.v}`)));
-  $$('[data-star]').forEach((b) => (b.onclick = () => { st.toggleStar(b.dataset.star); setView(sid, q); }));
+  $$('#vf button').forEach((b) => (b.onclick = () => go(qs(b.dataset.v, rf))));
+  $('#rf').onchange = (e) => go(qs(filter, e.target.value));
+  $('#headRate').onclick = () => askHeadRating('set', s);
+  hydrate(view());
+  $$('[data-rate]').forEach((b) => (b.onclick = async () => {
+    const c = st.S.cards[b.dataset.rate]; const inh = st.inheritedRating(c.setId);
+    const v = await pickRating('카드 별점', c.rating, { inheritNote: inh ? `물려받기: ${inh.name} ★${inh.v}` : '' });
+    if (v === undefined) return; st.setRating('card', c.id, v); setView(sid, q);
+  }));
   $$('[data-m]').forEach((b) => (b.onclick = () => {
     const m = b.dataset.m; const title = `${f.name} ${s.name}`;
     if (!all.length) return toast('먼저 카드를 추가해 주세요.');
-    if (m === 'test') return go(`#/study?mode=test&sets=${sid}`);
+    if (m === 'test' || m === 'mc' || m === 'learn') return go(`#/study?mode=${m}&sets=${sid}`);
     study.start(m, all, { title, shuffle: m !== 'flash', dir: 'term', key: 's:' + sid });
   }));
   $('#more').onclick = (e) => menu(e.currentTarget, [
     { label: '단원 이름 바꾸기', run: async () => { const n = await ask('단원 이름', s.name); if (n) { st.rename('set', sid, n); route(); } } },
+    { label: '단원 별점 매기기', run: () => askHeadRating('set', s) },
     { label: '위로 이동', run: () => { st.moveOrder('set', sid, -1); toast('순서를 바꿨어요'); } },
     { label: '아래로 이동', run: () => { st.moveOrder('set', sid, 1); toast('순서를 바꿨어요'); } },
-    { label: '다른 과목으로 옮기기', run: () => moveSet(sid) },
+    { label: '다른 폴더로 옮기기', run: () => moveSet(sid) },
     { label: '단원 삭제', danger: true, run: async () => { if (await confirmBox(`'${s.name}'을(를) 삭제할까요?`, `카드 ${all.length}장도 함께 삭제됩니다.`, '삭제', true)) { st.deleteSet(sid); go('#/f/' + f.id); } } },
   ]);
 }
 async function moveSet(sid) {
   const s = st.S.sets[sid];
-  const fs = st.folders().filter((f) => f.id !== s.folderId);
-  if (!fs.length) return toast('옮길 다른 과목이 없어요.');
-  const to = await modal(`<h3>어느 과목으로 옮길까요?</h3><div class="list">${fs.map((f) => `<button class="btn block" data-f="${f.id}">${esc(f.name)}</button>`).join('')}</div>
-    <div class="row end"><button class="btn ghost" data-x>취소</button></div>`, (m, close) => {
-    $$('[data-f]', m).forEach((b) => (b.onclick = () => close(b.dataset.f))); $('[data-x]', m).onclick = () => close(null);
-  });
+  const to = await pickFolder(`'${s.name}'을(를) 어느 폴더로 옮길까요?`, { currentId: s.folderId });
   if (!to) return;
   s.folderId = to; s.order = st.setsOf(to).length; s.u = Date.now(); st.save(); toast('옮겼어요'); route();
 }
@@ -184,8 +256,9 @@ async function moveSet(sid) {
 function editor(sid, q = {}) {
   const s = st.S.sets[sid]; if (!s || s.del) return go('#/');
   const f = st.S.folders[s.folderId];
-  let rows = st.cardsOf(sid).map((c) => ({ id: c.id, term: c.term, def: c.def }));
-  if (!rows.length) rows = [{ term: '', def: '' }, { term: '', def: '' }, { term: '', def: '' }];
+  let rows = st.cardsOf(sid).map((c) => ({ id: c.id, term: c.term, def: c.def, imgs: (c.imgs || []).slice() }));
+  if (!rows.length) rows = [{ term: '', def: '', imgs: [] }, { term: '', def: '', imgs: [] }, { term: '', def: '', imgs: [] }];
+  const dropped = new Set(); // 편집 중 뺀 사진 (저장 후 어디에도 안 쓰이면 지움)
   const removed = new Set();
   let dirty = false, timer = null;
 
@@ -195,16 +268,19 @@ function editor(sid, q = {}) {
     let order = 0;
     $$('.ed-row').forEach((el) => {
       const r = rows[+el.dataset.i]; if (!r) return;
-      const term = r.term.trim(), def = r.def.trim();
+      const term = r.term.trim(), def = r.def.trim(); const imgs = r.imgs || [];
       if (r.id && st.S.cards[r.id] && !st.S.cards[r.id].del) {
         const c = st.S.cards[r.id];
-        if (!term && !def) { st.deleteCard(r.id); r.id = null; return; }
-        if (c.term !== term || c.def !== def || c.order !== order) { c.term = term; c.def = def; c.order = order; c.cu = Date.now(); }
+        if (!term && !def && !imgs.length) { st.deleteCard(r.id); r.id = null; return; }
+        const sameImgs = (c.imgs || []).join(',') === imgs.join(',');
+        if (c.term !== term || c.def !== def || c.order !== order || !sameImgs) { c.term = term; c.def = def; c.order = order; c.imgs = imgs.slice(); c.cu = Date.now(); }
         order++;
-      } else if (term || def) { const c = st.newCard(sid, term, def, order); r.id = c.id; order++; }
+      } else if (term || def || imgs.length) { const c = st.newCard(sid, term, def, order); c.imgs = imgs.slice(); r.id = c.id; order++; }
     });
     for (const id of removed) st.deleteCard(id);
     removed.clear(); st.save(true);
+    for (const im of dropped) st.removeImageIfUnused(im);
+    dropped.clear();
     const sv = $('#saved'); if (sv) { sv.textContent = '저장됨 ✓'; }
   };
   const touch = () => { dirty = true; const sv = $('#saved'); if (sv) sv.textContent = '저장 중…'; clearTimeout(timer); timer = setTimeout(flush, 600); };
@@ -213,10 +289,28 @@ function editor(sid, q = {}) {
   const rowHtml = (r, i, n) => `<div class="ed-row" data-i="${i}"><div class="ed-head"><span>${n}</span><span class="spacer"></span>
       <button class="icon-btn" data-swap title="용어↔정의 바꾸기">${I.flip}</button><button class="icon-btn" data-del title="삭제">${I.trash}</button></div>
     <div class="ed-body"><div><textarea rows="1" data-k="term" placeholder="용어 (A)">${esc(r.term)}</textarea><div class="cap">용어</div></div>
-    <div><textarea rows="1" data-k="def" placeholder="정의 (B)">${esc(r.def)}</textarea><div class="cap">정의</div></div></div></div>`;
+    <div><textarea rows="1" data-k="def" placeholder="정의 (B)">${esc(r.def)}</textarea><div class="cap">정의</div></div></div>
+    <div class="ed-ph">${phHtml(r)}</div></div>`;
+  const phHtml = (r) => `${(r.imgs || []).map((id, k) => `<div class="t"><img data-img="${esc(id)}" data-k="${k}" alt=""><button data-rm="${k}" title="사진 빼기">×</button></div>`).join('')}
+      <button class="add" data-addph>＋ 사진${(r.imgs || []).length ? '' : '<br><span style="font-weight:600;font-size:11px">(용어 쪽)</span>'}</button>
+      <input type="file" accept="image/*" multiple hidden data-file>`;
+  const bindPh = (el) => {
+    const i = +el.dataset.i; const box = $('.ed-ph', el); const r = rows[i];
+    box.innerHTML = phHtml(r); hydrate(box);
+    const file = $('[data-file]', box);
+    $('[data-addph]', box).onclick = () => file.click();
+    file.onchange = async () => {
+      const files = [...file.files]; file.value = ''; if (!files.length) return;
+      toast(`사진 ${files.length}장 넣는 중…`);
+      for (const fl of files) { try { r.imgs.push(await fileToStoredImage(fl)); } catch (e) { toast('읽을 수 없는 사진이 있어요'); } }
+      bindPh(el); dirty = true; flush();
+    };
+    $$('[data-rm]', box).forEach((b) => (b.onclick = () => { const [id] = r.imgs.splice(+b.dataset.rm, 1); dropped.add(id); bindPh(el); dirty = true; flush(); }));
+    $$('img[data-img]', box).forEach((im) => (im.onclick = () => openViewer(r.imgs, +im.dataset.k)));
+  };
   const draw = () => {
     view().innerHTML = `
-    <div class="crumb"><a href="#/">홈</a> › <a href="#/f/${f.id}">${esc(f.name)}</a> › <a href="#/s/${sid}">${esc(s.name)}</a></div>
+    ${crumbs(f.id, true).replace('</div>', ` › <a href="#/s/${sid}">${esc(s.name)}</a></div>`)}
     <div class="sticky-bar"><h1 style="margin:0;font-size:22px">카드 편집</h1><span class="muted small" id="saved">자동 저장</span><span class="spacer"></span>
       <a class="btn primary" href="#/s/${sid}">완료</a></div>
     <div id="rows">${rows.map((r, i) => rowHtml(r, i, i + 1)).join('')}</div>
@@ -234,14 +328,15 @@ function editor(sid, q = {}) {
         if (e.key === 'Tab' && !e.shiftKey && ta.dataset.k === 'def' && el === $$('.ed-row').at(-1)) { e.preventDefault(); addRow(); }
       };
     });
-    $('[data-del]', el).onclick = () => { if (rows[i].id) removed.add(rows[i].id); rows[i] = null; el.remove(); renumber(); dirty = true; flush(); };
+    bindPh(el);
+    $('[data-del]', el).onclick = () => { if (rows[i].id) removed.add(rows[i].id); (rows[i].imgs || []).forEach((id) => dropped.add(id)); rows[i] = null; el.remove(); renumber(); dirty = true; flush(); };
     $('[data-swap]', el).onclick = () => {
       const r = rows[i]; [r.term, r.def] = [r.def, r.term];
       const [a, b] = $$('textarea', el); a.value = r.term; b.value = r.def; autoGrow(a); autoGrow(b); touch();
     };
   };
   const addRow = () => {
-    rows.push({ term: '', def: '' });
+    rows.push({ term: '', def: '', imgs: [] });
     const i = rows.length - 1;
     const wrap = document.createElement('div');
     wrap.innerHTML = rowHtml(rows[i], i, $$('.ed-row').length + 1);
@@ -284,7 +379,7 @@ function parsePaste(text, ts, cs) {
 }
 
 function importView(q = {}) {
-  const fs = st.folders();
+  const fs = st.folderTree().map((x) => x.f);
   const preSet = q.set && st.S.sets[q.set];
   const P = { fid: preSet ? preSet.folderId : (q.folder || fs[0]?.id || 'new'), sid: preSet ? preSet.id : 'new', newF: '', newS: '', text: '', ts: '\t', cs: '\n', cts: '-', ccs: ';;' };
   const draw = () => {
@@ -297,13 +392,13 @@ function importView(q = {}) {
     <div class="card" style="margin-top:12px">
       <div class="row"><h3>📄 카드팩 / 백업 파일 불러오기</h3><span class="spacer"></span><button class="btn primary" id="pickFile">파일 선택</button>
       <input type="file" id="file" hidden></div>
-      <p class="muted small" style="margin:6px 0 0">카드팩에는 과목·단원 이름이 들어 있어서 알맞은 곳에 자동으로 들어갑니다.</p>
+      <p class="muted small" style="margin:6px 0 0">카드팩에는 폴더·단원 이름이 들어 있어서 알맞은 곳에 자동으로 들어갑니다.</p>
     </div>
     <h2>붙여넣기</h2>
     <div class="card">
       <div class="grid2">
-        <div><label class="f">과목</label><select class="input" id="fsel">${fs.map((f) => `<option value="${f.id}" ${f.id === P.fid ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}<option value="new" ${P.fid === 'new' ? 'selected' : ''}>+ 새 과목…</option></select>
-          ${P.fid === 'new' ? `<input class="input" id="newF" style="margin-top:8px" placeholder="새 과목 이름" value="${esc(P.newF)}">` : ''}</div>
+        <div><label class="f">폴더</label><select class="input" id="fsel">${fs.map((f) => `<option value="${f.id}" ${f.id === P.fid ? 'selected' : ''}>${esc(st.folderPathLabel(f.id))}</option>`).join('')}<option value="new" ${P.fid === 'new' ? 'selected' : ''}>+ 새 폴더…</option></select>
+          ${P.fid === 'new' ? `<input class="input" id="newF" style="margin-top:8px" placeholder="새 폴더 이름" value="${esc(P.newF)}">` : ''}</div>
         <div><label class="f">단원</label><select class="input" id="ssel">${sets.map((s) => `<option value="${s.id}" ${s.id === P.sid ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}<option value="new" ${P.sid === 'new' ? 'selected' : ''}>+ 새 단원…</option></select>
           ${P.sid === 'new' ? `<input class="input" id="newS" style="margin-top:8px" placeholder="새 단원 이름" value="${esc(P.newS)}">` : ''}</div>
       </div>
@@ -333,7 +428,7 @@ function importView(q = {}) {
   const doImport = () => {
     const rows = curRows(); if (!rows.length) return;
     let fid = P.fid, sid = P.sid;
-    if (fid === 'new') { if (!P.newF.trim()) return toast('새 과목 이름을 입력해 주세요.'); fid = st.addFolder(P.newF).id; sid = 'new'; }
+    if (fid === 'new') { if (!P.newF.trim()) return toast('새 폴더 이름을 입력해 주세요.'); fid = st.addFolder(P.newF).id; sid = 'new'; }
     if (sid === 'new') { if (!P.newS.trim()) return toast('새 단원 이름을 입력해 주세요.'); sid = st.addSet(fid, P.newS).id; }
     const base = st.cardsOf(sid).length;
     rows.forEach((r, i) => st.newCard(sid, r.term, r.def, base + i));
@@ -371,14 +466,14 @@ export async function importFile(file) {
   <p class="muted">${esc(file.name)} · 카드 ${rows.length}장${parsed.data.title ? ` · ${esc(parsed.data.title)}` : ''}</p>
   ${newSets.length ? `<div class="banner">새로 만들어질 단원: ${newSets.map(esc).join(', ')}</div>` : ''}
   <p class="small muted">표의 용어·정의 칸을 눌러 바로 고칠 수 있어요. 회색 줄은 이미 같은 카드가 있어서 건너뜁니다.</p>
-  <div class="pv"><table><tr><th>과목 › 단원</th><th>용어 (A)</th><th>정의 (B)</th><th></th></tr>
+  <div class="pv"><table><tr><th>폴더 › 단원</th><th>용어 (A)</th><th>정의 (B)</th><th></th></tr>
   ${rows.map((r, i) => `<tr class="${r.dup ? 'dup' : ''}" data-i="${i}"><td class="muted">${esc(r.folder)} › ${esc(r.set)}</td><td contenteditable data-k="term">${esc(r.term)}</td><td contenteditable data-k="def">${esc(r.def)}</td>
     <td><label class="chk"><input type="checkbox" ${r.dup ? 'disabled' : 'checked'} data-use></label></td></tr>`).join('')}</table></div>
   <div class="row end" style="margin-top:14px"><a class="btn ghost" href="#/import">취소</a><button class="btn primary" id="apply">${add}장 추가${dup ? ` (중복 ${dup}장 제외)` : ''}</button></div>`;
   $$('.pv td[contenteditable]').forEach((td) => (td.oninput = () => { rows[+td.parentElement.dataset.i][td.dataset.k] = td.innerText.trim(); }));
   $$('[data-use]').forEach((cb) => (cb.onchange = () => { rows[+cb.closest('tr').dataset.i].skip = !cb.checked; }));
-  $('#apply').onclick = () => {
-    const r = st.applyPack(rows);
+  $('#apply').onclick = async () => {
+    const r = await st.applyPack(rows);
     toast(`${r.added}장 추가${r.skipped ? `, ${r.skipped}장 건너뜀` : ''}`, 3000);
     go('#/');
   };
@@ -390,8 +485,9 @@ async function importBackupFlow(d) {
     `${esc((d.exportedAt || '').slice(0, 16).replace('T', ' '))} 에 저장된 백업 (카드 ${nCards}장)<br><br>
     이 기기의 데이터와 <b>합칩니다</b>. 같은 카드는 더 최근에 바뀐 쪽이 남고, 어느 쪽에만 있는 카드는 모두 유지됩니다. 학습 기록도 함께 합쳐집니다.`, '합치기');
   if (!ok) return;
-  const r = st.mergeBackup(d);
-  await modal(`<h3>합치기 완료</h3><p>카드 ${r.cards}장 추가·수정, 학습 기록 ${r.progress}건 갱신, 과목 ${r.folders} · 단원 ${r.sets} · 시험 기록 ${r.history}건 반영</p>
+  toast('합치는 중…');
+  const r = await st.mergeBackup(d);
+  await modal(`<h3>합치기 완료</h3><p>카드 ${r.cards}장 추가·수정, 학습 기록 ${r.progress}건 갱신, 폴더 ${r.folders} · 단원 ${r.sets} · 시험 기록 ${r.history}건${r.images ? ` · 사진 ${r.images}장` : ''} 반영</p>
     <div class="row end"><button class="btn primary" data-ok>확인</button></div>`, (m, close) => { $('[data-ok]', m).onclick = () => close(true); });
   go('#/');
 }
@@ -403,44 +499,60 @@ function picker(q = {}) {
   const P = {
     mode: q.mode || last.mode || 'test',
     sel: new Set(),
-    shuffle: last.shuffle ?? true, dir: last.dir || 'term', filter: q.filter || 'all', count: last.count || 0,
+    shuffle: last.shuffle ?? true, dir: last.dir || 'term', filter: q.filter === 'wrong' ? 'wrong' : 'all', count: last.count || 0,
+    ratings: new Set(last.ratings || []), answer: last.answer || 'mc',
   };
+  if (!['flash', 'test', 'mc', 'learn', 'match', 'review'].includes(P.mode)) P.mode = 'test';
+  const allSets = st.orderedSets();
   if (q.sets) q.sets.split(',').forEach((id) => st.S.sets[id] && P.sel.add(id));
-  else if (q.folder) st.setsOf(q.folder).forEach((s) => P.sel.add(s.id));
-  else if (q.all) fs.forEach((f) => st.setsOf(f.id).forEach((s) => P.sel.add(s.id)));
-  else (last.sets || []).forEach((id) => st.S.sets[id] && !st.S.sets[id].del && P.sel.add(id));
-  const open = new Set(fs.filter((f) => st.setsOf(f.id).some((s) => P.sel.has(s.id))).map((f) => f.id));
+  else if (q.folder) st.setsUnder(q.folder).forEach((s) => P.sel.add(s.id));
+  else if (q.all) allSets.forEach((s) => P.sel.add(s.id));
+  else (last.sets || []).forEach((id) => allSets.some((s) => s.id === id) && P.sel.add(id));
+  const open = new Set();
+  for (const id of P.sel) st.folderPath(st.S.sets[id].folderId).forEach((f) => open.add(f.id));
+  if (q.folder) open.add(q.folder);
   if (!open.size && fs[0]) open.add(fs[0].id);
+  const node = (f) => {
+    const under = st.setsUnder(f.id); const k = under.filter((s) => P.sel.has(s.id)).length;
+    const own = st.setsOf(f.id), subs = st.subfolders(f.id);
+    return `<div class="fold"><div class="fh"><label class="chk"><input type="checkbox" data-f="${f.id}" ${k && k === under.length ? 'checked' : ''} ${under.length ? '' : 'disabled'}><span>${esc(f.name)}</span></label>
+      <span class="cnt pill ${k ? 'pr' : ''}">${k}/${under.length}</span><button class="icon-btn" data-open="${f.id}">${open.has(f.id) ? I.up : I.down}</button></div>
+      ${open.has(f.id) ? `${own.length ? `<div class="sets">${own.map((s) => `<label class="chip ${P.sel.has(s.id) ? 'on' : ''}"><input type="checkbox" data-s="${s.id}" ${P.sel.has(s.id) ? 'checked' : ''}>${esc(s.name)}<span class="c">${st.cardsOf(s.id).length}</span></label>`).join('')}</div>` : ''}
+        ${subs.length ? `<div class="subtree">${subs.map(node).join('')}</div>` : ''}
+        ${!own.length && !subs.length ? '<div class="sets"><span class="muted small">단원이 없어요</span></div>' : ''}` : ''}</div>`;
+  };
 
   const filtered = () => {
     let cs = st.cardsIn([...P.sel]);
-    if (P.filter === 'star') cs = cs.filter((c) => c.star);
     if (P.filter === 'wrong') cs = cs.filter((c) => c.p?.wrong);
+    if (P.ratings.size) cs = cs.filter((c) => st.ratingOk(c, P.ratings));
     return cs;
   };
   const draw = () => {
     const cs = filtered();
     const n = P.mode === 'review' ? study.reviewCounts(cs).total : (P.count && P.count < cs.length ? P.count : cs.length);
-    const modeName = { flash: '낱말카드', test: '테스트', match: '매칭', review: '복습' }[P.mode];
+    const modeName = { flash: '낱말카드', test: '테스트', mc: '객관식', learn: '학습하기', match: '매칭', review: '복습' }[P.mode];
+    const base = (() => { let x = st.cardsIn([...P.sel]); if (P.filter === 'wrong') x = x.filter((c) => c.p?.wrong); return x; })();
+    const rc = (k) => base.filter((c) => { const v = st.effRating(c).v; return k === 'none' ? v === null : v === k; }).length;
     view().innerHTML = `
     <h1>학습하기</h1>
     <div class="seg" id="msg" style="margin:10px 0 4px">
-      ${[['flash', '낱말카드'], ['test', '테스트'], ['match', '매칭'], ['review', '복습(Anki)']].map(([k, l]) => `<button data-v="${k}" class="${P.mode === k ? 'on' : ''}">${l}</button>`).join('')}</div>
-    <p class="muted small">${{ flash: '카드를 넘기며 외워요. 오른쪽으로 밀면 "알고 있음", 왼쪽은 "학습 중".', test: '문제를 보고 떠올린 뒤 정답을 확인하고 맞음/틀림을 직접 표시해요. 틀린 문제는 오답노트로 갑니다.', match: '용어와 정의 짝을 빠르게 맞히는 게임이에요.', review: 'Anki의 FSRS 알고리즘으로 잊어버릴 때쯤 다시 보여줘요. 매일 하면 가장 효율적이에요.' }[P.mode]}</p>
+      ${[['flash', '낱말카드'], ['learn', '학습하기'], ['test', '테스트'], ['mc', '객관식'], ['match', '매칭'], ['review', '복습(Anki)']].map(([k, l]) => `<button data-v="${k}" class="${P.mode === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+    <p class="muted small">${{ flash: '카드를 넘기며 외워요. 오른쪽으로 밀면 "알고 있음", 왼쪽은 "학습 중". 사진은 모두 보여요.', learn: '틀린 카드는 조금 뒤에 다시 나와요. 전부 맞혀야 끝나요.', test: '문제를 보고 떠올린 뒤 정답을 확인하고 맞음/틀림을 직접 표시해요. 틀린 문제는 오답노트로 갑니다.', mc: '국시처럼 보기 5개 중 정답을 골라요. 보기는 같은 단원·폴더의 다른 카드 답으로 자동으로 만들어져요. 틀린 문제는 오답노트로 갑니다.', match: '용어와 정의 짝을 빠르게 맞히는 게임이에요.', review: 'Anki의 FSRS 알고리즘으로 잊어버릴 때쯤 다시 보여줘요. 매일 하면 가장 효율적이에요.' }[P.mode]}${['test', 'mc', 'learn', 'review', 'match'].includes(P.mode) ? ' 사진이 여러 장인 카드는 한 장만 무작위로 나와요.' : ''}</p>
     <div class="row" style="margin-top:18px"><h2 style="margin:0">범위</h2><span class="spacer"></span>
       <button class="btn sm ghost" id="selAll">전체 선택</button><button class="btn sm ghost" id="selNone">선택 해제</button></div>
     <div class="tree" style="margin-top:10px">
-      ${fs.map((f) => { const ss = st.setsOf(f.id); const k = ss.filter((s) => P.sel.has(s.id)).length;
-        return `<div class="fold"><div class="fh"><label class="chk"><input type="checkbox" data-f="${f.id}" ${k && k === ss.length ? 'checked' : ''}><span>${esc(f.name)}</span></label>
-          <span class="cnt pill ${k ? 'pr' : ''}">${k}/${ss.length}</span><button class="icon-btn" data-open="${f.id}">${open.has(f.id) ? I.up : I.down}</button></div>
-          ${open.has(f.id) ? `<div class="sets">${ss.map((s) => `<label class="chip ${P.sel.has(s.id) ? 'on' : ''}"><input type="checkbox" data-s="${s.id}" ${P.sel.has(s.id) ? 'checked' : ''}>${esc(s.name)}<span class="c">${st.cardsOf(s.id).length}</span></label>`).join('') || '<span class="muted small">단원이 없어요</span>'}</div>` : ''}</div>`; }).join('') || '<div class="empty">먼저 과목과 카드를 만들어 주세요.</div>'}
+      ${fs.map(node).join('') || '<div class="empty">먼저 폴더와 카드를 만들어 주세요.</div>'}
     </div>
     <h2>옵션</h2>
     <div class="card">
       ${P.mode !== 'review' ? `<div class="switch"><span>순서 섞기 (랜덤)</span><label class="toggle"><input type="checkbox" id="shuf" ${P.shuffle ? 'checked' : ''}><span></span></label></div>` : ''}
       ${P.mode !== 'match' ? `<div class="switch"><span>먼저 보여줄 면</span><div class="seg" id="dsg">${[['term', '용어'], ['def', '정의'], ...(P.mode === 'review' ? [] : [['mix', '섞기']])].map(([k, l]) => `<button data-v="${k}" class="${P.dir === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>` : ''}
-      <div class="switch"><span>대상 카드</span><div class="seg" id="fsg">${[['all', '전체'], ['star', '별표만'], ['wrong', '오답만']].map(([k, l]) => `<button data-v="${k}" class="${P.filter === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
-      ${P.mode === 'test' || P.mode === 'flash' ? `<div class="switch"><span>문제 수</span><select class="input" id="cnt" style="width:auto">${[0, 10, 20, 30, 50, 100].map((v) => `<option value="${v}" ${+P.count === v ? 'selected' : ''}>${v ? v + '개' : '전부'}</option>`).join('')}</select></div>` : ''}
+      <div class="switch"><span>대상 카드</span><div class="seg" id="fsg">${[['all', '전체'], ['wrong', '오답만']].map(([k, l]) => `<button data-v="${k}" class="${P.filter === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+      <div class="switch" style="flex-wrap:wrap"><span>별점 <span class="muted small">(여러 개 선택 가능 · 안 고르면 전체)</span></span>
+        <div class="row" id="rsg" style="gap:6px">${[5, 4, 3, 2, 1, 0, 'none'].map((k) => `<button class="chip chip-r ${P.ratings.has(k) ? 'on' : ''}" data-r="${k}">${k === 'none' ? '없음' : '★' + k}<span class="c">${rc(k)}</span></button>`).join('')}</div></div>
+      ${P.mode === 'learn' ? `<div class="switch"><span>답하는 방식</span><div class="seg" id="asg">${[['mc', '객관식'], ['self', '직접 채점(O/X)']].map(([k, l]) => `<button data-v="${k}" class="${P.answer === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>` : ''}
+      ${['test', 'flash', 'mc', 'learn'].includes(P.mode) ? `<div class="switch"><span>문제 수</span><select class="input" id="cnt" style="width:auto">${[0, 10, 20, 30, 50, 100].map((v) => `<option value="${v}" ${+P.count === v ? 'selected' : ''}>${v ? v + '개' : '전부'}</option>`).join('')}</select></div>` : ''}
     </div>
     <div class="pick-bar">
       <div class="card row" style="width:100%;padding:10px 12px 10px 18px"><div><b>${n}장</b> <span class="muted small">${esc(scopeLabel([...P.sel]))}</span></div><span class="spacer"></span>
@@ -450,10 +562,10 @@ function picker(q = {}) {
   };
   const bind = () => {
     $$('#msg button').forEach((b) => (b.onclick = () => { P.mode = b.dataset.v; if (P.mode === 'review' && P.dir === 'mix') P.dir = 'term'; draw(); }));
-    $('#selAll').onclick = () => { fs.forEach((f) => st.setsOf(f.id).forEach((s) => P.sel.add(s.id))); draw(); };
+    $('#selAll').onclick = () => { allSets.forEach((s) => P.sel.add(s.id)); draw(); };
     $('#selNone').onclick = () => { P.sel.clear(); draw(); };
     $$('[data-f]').forEach((cb) => {
-      const ss = st.setsOf(cb.dataset.f); const k = ss.filter((s) => P.sel.has(s.id)).length;
+      const ss = st.setsUnder(cb.dataset.f); const k = ss.filter((s) => P.sel.has(s.id)).length;
       cb.indeterminate = k > 0 && k < ss.length;
       cb.onchange = () => { ss.forEach((s) => (cb.checked ? P.sel.add(s.id) : P.sel.delete(s.id))); open.add(cb.dataset.f); draw(); };
     });
@@ -462,16 +574,15 @@ function picker(q = {}) {
     const sh = $('#shuf'); if (sh) sh.onchange = () => { P.shuffle = sh.checked; };
     $$('#dsg button').forEach((b) => (b.onclick = () => { P.dir = b.dataset.v; draw(); }));
     $$('#fsg button').forEach((b) => (b.onclick = () => { P.filter = b.dataset.v; draw(); }));
+    $$('#rsg [data-r]').forEach((b) => (b.onclick = () => { const k = b.dataset.r === 'none' ? 'none' : +b.dataset.r; P.ratings.has(k) ? P.ratings.delete(k) : P.ratings.add(k); draw(); }));
+    $$('#asg button').forEach((b) => (b.onclick = () => { P.answer = b.dataset.v; draw(); }));
     const cn = $('#cnt'); if (cn) cn.onchange = () => { P.count = +cn.value; draw(); };
     $('#go').onclick = () => {
       const sets = [...P.sel];
-      st.S.local.lastPick = { mode: P.mode, sets, shuffle: P.shuffle, dir: P.dir, count: P.count }; st.save();
-      const cards = st.cardsIn(sets).sort((a, b) => {
-        const sa = st.S.sets[a.setId], sb = st.S.sets[b.setId];
-        const fa = st.S.folders[sa.folderId], fb = st.S.folders[sb.folderId];
-        return (fa.order ?? 0) - (fb.order ?? 0) || (sa.order ?? 0) - (sb.order ?? 0) || (a.order ?? 0) - (b.order ?? 0);
-      });
-      study.start(P.mode, cards, { title: scopeLabel(sets), shuffle: P.shuffle, dir: P.dir, filter: P.filter, count: P.count, key: 'p:' + sets.sort().join(',') });
+      st.S.local.lastPick = { mode: P.mode, sets, shuffle: P.shuffle, dir: P.dir, count: P.count, ratings: [...P.ratings], answer: P.answer }; st.save();
+      const idx = new Map(allSets.map((x, i) => [x.id, i]));
+      const cards = st.cardsIn(sets).sort((a, b) => idx.get(a.setId) - idx.get(b.setId) || (a.order ?? 0) - (b.order ?? 0));
+      study.start(P.mode, cards, { title: scopeLabel(sets), shuffle: P.shuffle, dir: P.dir, filter: P.filter, ratings: [...P.ratings], answer: P.answer, count: P.count, key: 'p:' + sets.sort().join(',') });
     };
   };
   draw();
@@ -483,24 +594,25 @@ function wrongView() {
   const grad = st.S.settings.gradStreak;
   const groups = new Map();
   for (const c of ws) { const s = st.S.sets[c.setId]; const k = s.id; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(c); }
-  const keys = [...groups.keys()].sort((a, b) => {
-    const sa = st.S.sets[a], sb = st.S.sets[b]; const fa = st.S.folders[sa.folderId], fb = st.S.folders[sb.folderId];
-    return (fa.order ?? 0) - (fb.order ?? 0) || (sa.order ?? 0) - (sb.order ?? 0);
-  });
+  const idx = new Map(st.orderedSets().map((x, i) => [x.id, i]));
+  const keys = [...groups.keys()].sort((a, b) => (idx.get(a) ?? 0) - (idx.get(b) ?? 0));
   view().innerHTML = `
   <h1>오답노트</h1>
   <p class="muted">테스트에서 틀린 카드가 모여요. <b>연속 ${grad}번</b> 맞히면 자동으로 빠집니다.</p>
   ${ws.length ? `<div class="row" style="margin:12px 0">
     <button class="btn primary" id="t">${I.test} 오답 전체 시험 (${ws.length})</button>
+    <button class="btn" id="tmc">${I.test} 오답 객관식</button>
     <button class="btn" id="fl">${I.cards} 오답 낱말카드</button>
     <a class="btn" href="#/study?mode=test&filter=wrong">범위 골라 오답 시험</a></div>` : ''}
-  ${keys.map((k) => { const s = st.S.sets[k]; const f = st.S.folders[s.folderId]; const cs = groups.get(k);
-    return `<div class="row" style="margin-top:22px"><h2 style="margin:0">${esc(f.name)} › ${esc(s.name)}</h2><span class="pill ng">${cs.length}</span><span class="spacer"></span>
+  ${keys.map((k) => { const s = st.S.sets[k]; const fl = st.folderPathLabel(s.folderId); const cs = groups.get(k);
+    return `<div class="row" style="margin-top:22px"><h2 style="margin:0">${esc(fl)} › ${esc(s.name)}</h2><span class="pill ng">${cs.length}</span><span class="spacer"></span>
       <button class="btn sm" data-tset="${k}">이 단원 오답 시험</button></div>
-      <div class="term-list" style="margin-top:10px">${cs.map((c) => `<div class="term-row wrong"><div class="a">${esc(c.term)}</div><div class="b">${esc(c.def)}<div class="small muted" style="margin-top:6px">틀림 ${c.p.ng}회 · 연속 정답 ${c.p.streak}/${grad}</div></div>
+      <div class="term-list" style="margin-top:10px">${cs.map((c) => `<div class="term-row wrong"><div class="a">${esc(c.term)}${(c.imgs || []).length ? `<div class="ph-row">${photoBlock(c.imgs, { compact: true })}</div>` : ''}</div><div class="b">${esc(c.def)}<div class="small muted" style="margin-top:6px">틀림 ${c.p.ng}회 · 연속 정답 ${c.p.streak}/${grad}</div></div>
         <div class="acts"><button class="btn sm ghost" data-clear="${c.id}" title="오답노트에서 빼기">✓ 외웠음</button></div></div>`).join('')}</div>`; }).join('')}
   ${ws.length ? '' : '<div class="empty"><div class="big">🎯</div><p>오답이 없어요!<br>테스트에서 틀린 문제가 여기에 모입니다.</p><a class="btn primary" href="#/study?mode=test">테스트 보러 가기</a></div>'}`;
+  hydrate(view());
   const t = $('#t'); if (t) t.onclick = () => study.start('test', ws, { title: '오답노트 전체', shuffle: true, dir: 'term' });
+  const tm = $('#tmc'); if (tm) tm.onclick = () => study.start('mc', ws, { title: '오답노트 전체', shuffle: true, dir: 'term' });
   const fl = $('#fl'); if (fl) fl.onclick = () => study.start('flash', ws, { title: '오답노트', shuffle: true, dir: 'term' });
   $$('[data-tset]').forEach((b) => (b.onclick = () => { const s = st.S.sets[b.dataset.tset]; study.start('test', groups.get(b.dataset.tset), { title: `${st.S.folders[s.folderId].name} ${s.name} 오답`, shuffle: true, dir: 'term' }); }));
   $$('[data-clear]').forEach((b) => (b.onclick = () => { const c = st.S.cards[b.dataset.clear]; c.p.wrong = false; c.p.streak = 0; st.touchProgress(c); toast('오답노트에서 뺐어요'); wrongView(); }));
@@ -514,7 +626,7 @@ function statsView() {
   const days = [];
   for (let i = 13; i >= 0; i--) { const d = new Date(); d.setDate(d.getDate() - i); const k = st.today(d); const v = st.S.days[k] || {}; days.push({ k, d, n: (v.r || 0) + (v.t || 0) + (v.f || 0) }); }
   const max = Math.max(1, ...days.map((d) => d.n));
-  const setsAcc = st.folders().flatMap((f) => st.setsOf(f.id).map((s) => ({ f, s, a: acc(st.cardsOf(s.id)), w: st.cardsOf(s.id).filter((c) => c.p?.wrong).length }))).filter((x) => x.a.n > 0).sort((x, y) => x.a.pct - y.a.pct);
+  const setsAcc = st.orderedSets().map((s) => ({ fl: st.folderPathLabel(s.folderId), s, a: acc(st.cardsOf(s.id)), w: st.cardsOf(s.id).filter((c) => c.p?.wrong).length })).filter((x) => x.a.n > 0).sort((x, y) => x.a.pct - y.a.pct);
   const dd = dday();
   view().innerHTML = `
   <h1>통계</h1>
@@ -529,7 +641,7 @@ function statsView() {
     <div class="muted small" style="margin-top:6px">낱말카드·테스트·복습에서 넘긴 카드 수</div></div>
   <h2>단원별 정답률 <span class="muted small">(낮은 순 = 약한 단원)</span></h2>
   ${setsAcc.length ? `<div class="card" style="overflow-x:auto"><table class="tbl"><tr><th>단원</th><th>정답률</th><th></th><th>푼 횟수</th><th>오답</th></tr>
-    ${setsAcc.map((x) => `<tr><td><a href="#/s/${x.s.id}">${esc(x.f.name)} › ${esc(x.s.name)}</a></td><td><b>${x.a.pct}%</b></td><td style="width:30%"><div class="meter"><i style="width:${x.a.pct}%"></i></div></td><td>${x.a.n}</td><td>${x.w ? `<span class="pill ng">${x.w}</span>` : '-'}</td></tr>`).join('')}</table></div>`
+    ${setsAcc.map((x) => `<tr><td><a href="#/s/${x.s.id}">${esc(x.fl)} › ${esc(x.s.name)}</a></td><td><b>${x.a.pct}%</b></td><td style="width:30%"><div class="meter"><i style="width:${x.a.pct}%"></i></div></td><td>${x.a.n}</td><td>${x.w ? `<span class="pill ng">${x.w}</span>` : '-'}</td></tr>`).join('')}</table></div>`
     : '<div class="card muted">테스트를 보면 단원별 정답률이 나타나요.</div>'}
   <h2>테스트 기록</h2>
   ${hist.length ? `<div class="list">${hist.slice(0, 30).map((h) => `<a class="tile" href="#/result/${h.id}"><div class="row"><span class="t" style="font-size:15px">${esc(h.scope)}</span><span class="spacer"></span><span class="pill ${h.ok / h.total >= 0.8 ? 'ok' : h.ok / h.total < 0.6 ? 'ng' : ''}">${Math.round((h.ok / h.total) * 100)}%</span></div>
@@ -578,13 +690,13 @@ async function settingsView() {
   </div>
   <h2>위험 구역</h2>
   <div class="card"><button class="btn ng" id="reset">이 기기의 모든 데이터 삭제</button></div>
-  <p class="muted small" style="margin-top:24px">한의 암기노트 · 복습 일정은 Anki의 FSRS 알고리즘(ts-fsrs, MIT)을 사용합니다.</p>`;
+  <p class="muted small" style="margin-top:24px">한의 암기노트 v2.0 · 복습 일정은 Anki의 FSRS 알고리즘(ts-fsrs, MIT)을 사용합니다.</p>`;
 
   const fname = (ext) => { const d = new Date(); const z = (n) => String(n).padStart(2, '0'); return `암기노트-백업-${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}.${ext}`; };
-  $('#exp').onclick = () => { download(fname('json'), JSON.stringify(st.exportBackup(), null, 1)); st.markExported(); toast('백업 파일을 저장했어요 (다운로드 폴더)'); setTimeout(settingsView, 600); };
+  $('#exp').onclick = async () => { toast('백업 파일 만드는 중…'); download(fname('json'), JSON.stringify(await st.exportBackup(), null, 1)); st.markExported(); toast('백업 파일을 저장했어요 (다운로드 폴더)'); setTimeout(settingsView, 600); };
   const sh = $('#share');
   if (sh) sh.onclick = async () => {
-    const file = new File([JSON.stringify(st.exportBackup(), null, 1)], fname('txt'), { type: 'text/plain' });
+    const file = new File([JSON.stringify(await st.exportBackup(), null, 1)], fname('txt'), { type: 'text/plain' });
     try { await navigator.share({ files: [file], title: '암기노트 백업' }); st.markExported(); settingsView(); }
     catch (e) { if (e.name !== 'AbortError') toast('공유에 실패했어요. 「백업 파일 저장」을 사용해 주세요.'); }
   };
@@ -598,7 +710,7 @@ async function settingsView() {
     if (!(await confirmBox('정말 모든 데이터를 삭제할까요?', '이 기기의 과목, 카드, 학습 기록이 모두 지워집니다. 먼저 백업 파일을 저장해 두세요.', '모두 삭제', true))) return;
     const n = await ask('확인을 위해 "삭제"라고 입력하세요', '', '삭제', '삭제');
     if (n !== '삭제') return toast('취소했어요');
-    st.resetAll(); toast('삭제했어요'); go('#/');
+    await st.resetAll(); toast('삭제했어요'); go('#/');
   };
 }
 function applyTheme() {
@@ -615,6 +727,13 @@ function applyTheme() {
   if (/^#\/play/.test(location.hash)) location.hash = '#/';
   route();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    const hadController = !!navigator.serviceWorker.controller;
     navigator.serviceWorker.register('sw.js').catch(() => {});
+    // 새 버전이 설치되면: 학습 중이 아닐 때 자동으로 새로고침
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) return;
+      if (/^#\/(play|edit)/.test(location.hash)) toast('새 버전이 준비됐어요. 앱을 다시 열면 적용됩니다.', 4000);
+      else location.reload();
+    });
   }
 })();

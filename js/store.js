@@ -29,26 +29,52 @@ let dbp = null;
 function openDB() {
   if (dbp) return dbp;
   dbp = new Promise((res, rej) => {
-    const r = indexedDB.open(DB_NAME, 1);
-    r.onupgradeneeded = () => r.result.createObjectStore('kv');
-    r.onsuccess = () => res(r.result);
+    const r = indexedDB.open(DB_NAME, 2);
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
+      if (!db.objectStoreNames.contains('img')) db.createObjectStore('img'); // v2.0: 카드 사진 (id → Blob)
+    };
+    r.onsuccess = () => { const db = r.result; db.onversionchange = () => db.close(); res(db); };
     r.onerror = () => rej(r.error);
   });
   return dbp;
 }
-async function idbGet(k) {
+async function idbGet(k, store = 'kv') {
   const db = await openDB();
   return new Promise((res, rej) => {
-    const t = db.transaction('kv', 'readonly').objectStore('kv').get(k);
+    const t = db.transaction(store, 'readonly').objectStore(store).get(k);
     t.onsuccess = () => res(t.result);
     t.onerror = () => rej(t.error);
   });
 }
-async function idbSet(k, v) {
+async function idbDel(k, store = 'kv') {
   const db = await openDB();
   return new Promise((res, rej) => {
-    const tx = db.transaction('kv', 'readwrite');
-    tx.objectStore('kv').put(v, k);
+    const tx = db.transaction(store, 'readwrite');
+    tx.objectStore(store).delete(k);
+    tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+  });
+}
+async function idbKeys(store) {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const t = db.transaction(store, 'readonly').objectStore(store).getAllKeys();
+    t.onsuccess = () => res(t.result); t.onerror = () => rej(t.error);
+  });
+}
+async function idbClear(store) {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(store, 'readwrite'); tx.objectStore(store).clear();
+    tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+  });
+}
+async function idbSet(k, v, store = 'kv') {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(store, 'readwrite');
+    tx.objectStore(store).put(v, k);
     tx.oncomplete = () => res();
     tx.onerror = () => rej(tx.error);
   });
@@ -65,6 +91,7 @@ export async function load() {
     S = { ...base, ...data, settings: { ...base.settings, ...(data.settings || {}) },
           local: { ...base.local, ...(data.local || {}) } };
   } else S = base;
+  normalize();
   try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (_) {}
   return S;
 }
@@ -97,23 +124,53 @@ export async function storagePersisted() {
 const alive = (o) => o && !o.del;
 const byOrder = (a, b) => (a.order ?? 0) - (b.order ?? 0) || (a.name || '').localeCompare(b.name || '', 'ko', { numeric: true });
 
-export const folders = () => Object.values(S.folders).filter(alive).sort(byOrder);
+// 폴더는 parentId로 여러 단계(하위 폴더)를 가질 수 있다. parentId 없음 = 최상위.
+const pid = (f) => f.parentId || null;
+const nextOrder = (list) => list.reduce((m, x) => Math.max(m, (x.order ?? 0) + 1), 0);
+export const folderAlive = (fid) => {
+  for (let f = S.folders[fid], k = 0; f && k < 50; f = S.folders[pid(f)], k++) { if (f.del) return false; if (!pid(f)) return true; }
+  return false;
+};
+export const subfolders = (parentId = null) => Object.values(S.folders).filter((f) => alive(f) && pid(f) === (parentId || null) && folderAlive(f.id)).sort(byOrder);
+export const folders = () => subfolders(null);
+// 깊이 우선으로 모든 폴더 [{f, depth}]
+export function folderTree(parentId = null, depth = 0, out = []) {
+  for (const f of subfolders(parentId)) { out.push({ f, depth }); folderTree(f.id, depth + 1, out); }
+  return out;
+}
+export const folderPath = (fid) => { const out = []; for (let f = S.folders[fid], k = 0; f && k < 50; f = S.folders[pid(f)], k++) out.unshift(f); return out; };
+export const folderPathLabel = (fid, sep = ' › ') => folderPath(fid).map((f) => f.name).join(sep);
+export const isDescendant = (fid, ancestorId) => folderPath(fid).some((f) => f.id === ancestorId);
 export const setsOf = (fid) => Object.values(S.sets).filter((s) => alive(s) && s.folderId === fid).sort(byOrder);
+// 폴더와 그 하위 폴더 전체의 단원 (화면 순서대로)
+export function setsUnder(fid) {
+  const out = [...setsOf(fid)];
+  for (const sf of subfolders(fid)) out.push(...setsUnder(sf.id));
+  return out;
+}
+export const orderedSets = () => folderTree().flatMap(({ f }) => setsOf(f.id));
 export const cardsOf = (sid) => Object.values(S.cards).filter((c) => alive(c) && c.setId === sid).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-export const allCards = () => Object.values(S.cards).filter((c) => alive(c) && alive(S.sets[c.setId]) && alive(S.folders[S.sets[c.setId].folderId]));
+export const allCards = () => Object.values(S.cards).filter((c) => alive(c) && alive(S.sets[c.setId]) && folderAlive(S.sets[c.setId].folderId));
 export const cardsIn = (setIds) => { const ids = new Set(setIds); return allCards().filter((c) => ids.has(c.setId)); };
 export const folderOfSet = (sid) => S.folders[S.sets[sid]?.folderId];
 export const wrongCards = () => allCards().filter((c) => c.p && c.p.wrong);
 
 // ---------- 변경 ----------
-export function addFolder(name) {
+export function addFolder(name, parentId = null) {
   const id = uid();
-  S.folders[id] = { id, name: name.trim(), order: folders().length, u: now() };
+  S.folders[id] = { id, name: name.trim(), parentId: parentId || null, order: nextOrder(subfolders(parentId)), u: now() };
   save(); return S.folders[id];
+}
+// 폴더를 다른 폴더 안으로(또는 최상위로) 옮기기. 자기 자신/자기 하위로는 불가.
+export function moveFolder(fid, newParentId) {
+  const f = S.folders[fid]; if (!f) return false;
+  if (newParentId && (newParentId === fid || isDescendant(newParentId, fid))) return false;
+  f.order = nextOrder(subfolders(newParentId).filter((x) => x.id !== fid)); f.parentId = newParentId || null; f.u = now();
+  save(); return true;
 }
 export function addSet(folderId, name) {
   const id = uid();
-  S.sets[id] = { id, folderId, name: name.trim(), order: setsOf(folderId).length, u: now() };
+  S.sets[id] = { id, folderId, name: name.trim(), order: nextOrder(setsOf(folderId)), u: now() };
   save(); return S.sets[id];
 }
 export function rename(kind, id, name) {
@@ -121,7 +178,7 @@ export function rename(kind, id, name) {
   if (!o) return; o.name = name.trim(); o.u = now(); save();
 }
 export function moveOrder(kind, id, dir) {
-  const list = kind === 'folder' ? folders() : setsOf(S.sets[id].folderId);
+  const list = kind === 'folder' ? subfolders(pid(S.folders[id])) : setsOf(S.sets[id].folderId);
   const i = list.findIndex((x) => x.id === id); const j = i + dir;
   if (i < 0 || j < 0 || j >= list.length) return;
   [list[i], list[j]] = [list[j], list[i]];
@@ -137,8 +194,10 @@ export function deleteSet(id) {
 }
 export function deleteFolder(id) {
   const t = now();
+  for (const sf of subfolders(id)) deleteFolder(sf.id);
   for (const s of setsOf(id)) deleteSet(s.id);
-  S.folders[id] = { id, name: S.folders[id]?.name, del: true, u: t };
+  const f = S.folders[id];
+  S.folders[id] = { id, name: f?.name, parentId: f ? pid(f) : null, del: true, u: t };
   save();
 }
 function tombCard(id, t = now()) {
@@ -149,7 +208,7 @@ export function deleteCard(id) { tombCard(id); save(); }
 
 export function newCard(setId, term, def, order) {
   const id = uid(); const t = now();
-  S.cards[id] = { id, setId, term, def, star: false, order: order ?? cardsOf(setId).length, cu: t, p: blankProgress(), pu: t };
+  S.cards[id] = { id, setId, term, def, rating: null, imgs: [], order: order ?? cardsOf(setId).length, cu: t, p: blankProgress(), pu: t };
   return S.cards[id];
 }
 export const blankProgress = () => ({ fsrs: null, ok: 0, ng: 0, wrong: false, streak: 0, last: 0 });
@@ -158,7 +217,66 @@ export function updateCardContent(id, patch) {
   const c = S.cards[id]; if (!c) return;
   Object.assign(c, patch); c.cu = now(); save();
 }
-export function toggleStar(id) { const c = S.cards[id]; updateCardContent(id, { star: !c.star }); }
+// ---------- 별점 (v2.0) ----------
+// rating: null(없음) 또는 0~5. 카드에 없으면 단원 → 폴더(상위로) 순서로 물려받는다.
+export function normalize() {
+  for (const c of Object.values(S.cards)) {
+    if (c.del) continue;
+    if (c.star === true && (c.rating === undefined || c.rating === null)) c.rating = 5; // v1 별표 → 별 5개
+    if ('star' in c) delete c.star;
+    if (c.rating === undefined) c.rating = null;
+    if (!Array.isArray(c.imgs)) c.imgs = [];
+  }
+}
+export function setRating(kind, id, val) {
+  const v = val === null || val === '' || val === undefined ? null : Math.max(0, Math.min(5, +val));
+  if (kind === 'card') return updateCardContent(id, { rating: v });
+  const o = (kind === 'folder' ? S.folders : S.sets)[id]; if (!o) return;
+  o.rating = v; o.u = now(); save();
+}
+export function inheritedRating(setId) {
+  const s = S.sets[setId]; if (!s) return null;
+  if (s.rating !== undefined && s.rating !== null) return { v: s.rating, from: 'set', name: s.name };
+  for (const f of folderPath(s.folderId).reverse()) if (f.rating !== undefined && f.rating !== null) return { v: f.rating, from: 'folder', name: f.name };
+  return null;
+}
+export function folderInherited(fid) {
+  const path = folderPath(fid); path.pop();
+  for (const f of path.reverse()) if (f.rating !== undefined && f.rating !== null) return { v: f.rating, from: 'folder', name: f.name };
+  return null;
+}
+// 카드의 실제 별점: { v: 0~5 | null, inherited: bool }
+export function effRating(c) {
+  if (c.rating !== undefined && c.rating !== null) return { v: c.rating, inherited: false };
+  const r = inheritedRating(c.setId);
+  return r ? { v: r.v, inherited: true, from: r.name } : { v: null, inherited: false };
+}
+// allowed: Set of 0..5 and 'none'. 비어 있거나 null이면 전체 통과
+export function ratingOk(c, allowed) {
+  if (!allowed || !allowed.size) return true;
+  const v = effRating(c).v;
+  return allowed.has(v === null ? 'none' : v);
+}
+
+// ---------- 사진 (v2.0) ----------
+// 사진은 상태 JSON과 분리해 IndexedDB 'img' 저장소에 Blob으로 보관. 카드에는 id 목록(imgs)만.
+const urlCache = new Map();
+export async function putImage(blob, id = 'i' + uid()) { await idbSet(id, blob, 'img'); return id; }
+export async function imageURL(id) {
+  if (urlCache.has(id)) return urlCache.get(id);
+  const b = await idbGet(id, 'img').catch(() => null);
+  if (!b) return null;
+  const u = URL.createObjectURL(b); urlCache.set(id, u); return u;
+}
+export async function removeImageIfUnused(id) {
+  const used = Object.values(S.cards).some((c) => !c.del && (c.imgs || []).includes(id));
+  if (used) return;
+  try { await idbDel(id, 'img'); } catch (_) {}
+  if (urlCache.has(id)) { URL.revokeObjectURL(urlCache.get(id)); urlCache.delete(id); }
+}
+const blobToDataURL = (b) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(b); });
+const dataURLToBlob = async (d) => (await fetch(d)).blob();
+async function storeDataURL(id, d) { try { await putImage(await dataURLToBlob(d), id); return true; } catch (_) { return false; } }
 export function touchProgress(c) { c.pu = now(); if (!c.p) c.p = blankProgress(); save(); }
 
 // 세트 전체 편집 저장 (편집기에서) rows: [{id?, term, def}]
@@ -210,10 +328,16 @@ export function recordTest(items, scopeLabel) {
 }
 
 // ---------- 백업 / 병합 ----------
-export function exportBackup() {
+export async function exportBackup() {
   const strip = (o) => o;
+  const images = {};
+  const ids = new Set(Object.values(S.cards).filter((c) => !c.del).flatMap((c) => c.imgs || []));
+  for (const id of ids) {
+    const b = await idbGet(id, 'img').catch(() => null);
+    if (b) images[id] = await blobToDataURL(b);
+  }
   return {
-    type: APP_TYPE_BACKUP, version: 1, exportedAt: new Date().toISOString(),
+    type: APP_TYPE_BACKUP, version: 2, exportedAt: new Date().toISOString(), images,
     note: '한의 암기노트 백업 파일. 카드 내용 수정 시 cu 값을 현재 시각(ms)으로 올릴 것.',
     folders: Object.values(S.folders).map(strip),
     sets: Object.values(S.sets).map(strip),
@@ -235,8 +359,12 @@ export function parseImport(text) {
 }
 
 // 백업 병합: 같은 id면 더 최근 것이 이김. 새 id는 추가. 삭제 표시도 전파.
-export function mergeBackup(d) {
-  const r = { folders: 0, sets: 0, cards: 0, progress: 0, history: 0 };
+export async function mergeBackup(d) {
+  const r = { folders: 0, sets: 0, cards: 0, progress: 0, history: 0, images: 0 };
+  if (d.images) {
+    let have = new Set(); try { have = new Set(await idbKeys('img')); } catch (_) {}
+    for (const [id, data] of Object.entries(d.images)) if (!have.has(id) && await storeDataURL(id, data)) r.images++;
+  }
   const take = (coll, arr, key) => {
     for (const o of arr || []) {
       if (!o || !o.id) continue;
@@ -265,34 +393,62 @@ export function mergeBackup(d) {
     S.days[day] = { r: Math.max(cur.r || 0, v.r || 0), t: Math.max(cur.t || 0, v.t || 0), f: Math.max(cur.f || 0, v.f || 0) };
   }
   if (d.settings && (d.settings.u || 0) > (S.settings.u || 0)) S.settings = { ...S.settings, ...d.settings };
-  save(true);
+  normalize();
+  await save(true);
   return r;
 }
 
 // 카드팩: 과목/단원 이름으로 찾아서(없으면 만들고) 카드 추가. 같은 단원에 완전히 같은 카드는 건너뜀.
+const splitPath = (p) => String(p || '미분류').split(/\s*[>›]\s*/).map((x) => x.trim()).filter(Boolean);
+// 경로로 폴더 찾기. 이름 하나만 주어졌고 최상위에 없으면, 어디에 있든 같은 이름의 폴더가 하나뿐일 때 그것을 사용.
+function findFolderPath(names) {
+  let parent = null, f = null;
+  for (const n of names) { f = subfolders(parent).find((x) => x.name === n); if (!f) break; parent = f.id; }
+  if (f) return f;
+  if (names.length === 1) {
+    const hits = folderTree().map((x) => x.f).filter((x) => x.name === names[0]);
+    if (hits.length === 1) return hits[0];
+  }
+  return null;
+}
+function ensureFolderPath(names) {
+  const found = findFolderPath(names); if (found) return found;
+  let parent = null, f = null;
+  for (const n of names) { f = subfolders(parent).find((x) => x.name === n) || addFolder(n, parent); parent = f.id; }
+  return f;
+}
 export function previewPack(d) {
   const rows = (d.cards || []).map((c) => ({
-    folder: String(c.folder || '미분류').trim(), set: String(c.set || '기본').trim(),
+    folder: splitPath(c.folder).join(' › '), set: String(c.set || '기본').trim(),
     term: String(c.term ?? '').trim(), def: String(c.def ?? '').trim(),
-  })).filter((c) => c.term || c.def);
+    rating: c.rating !== undefined && c.rating !== null && c.rating !== '' ? Math.max(0, Math.min(5, +c.rating)) : (c.star ? 5 : null),
+    imgs: Array.isArray(c.imgs) ? c.imgs.filter((x) => typeof x === 'string' && x.startsWith('data:image')) : [],
+  })).filter((c) => c.term || c.def || c.imgs.length);
   return rows.map((c) => {
-    const f = folders().find((x) => x.name === c.folder);
+    const f = findFolderPath(splitPath(c.folder));
     const s = f && setsOf(f.id).find((x) => x.name === c.set);
     const dup = s && cardsOf(s.id).some((x) => x.term === c.term && x.def === c.def);
-    return { ...c, newFolder: !f, newSet: !s, dup: !!dup };
+    return { ...c, folder: f ? folderPathLabel(f.id) : c.folder, newFolder: !f, newSet: !s, dup: !!dup };
   });
 }
-export function applyPack(rows) {
+export async function applyPack(rows) {
   let added = 0, skipped = 0;
   for (const c of rows) {
     if (c.dup || c.skip) { skipped++; continue; }
-    let f = folders().find((x) => x.name === c.folder) || addFolder(c.folder);
-    let s = setsOf(f.id).find((x) => x.name === c.set) || addSet(f.id, c.set);
+    const f = ensureFolderPath(splitPath(c.folder));
+    const s = setsOf(f.id).find((x) => x.name === c.set) || addSet(f.id, c.set);
     if (cardsOf(s.id).some((x) => x.term === c.term && x.def === c.def)) { skipped++; continue; }
-    newCard(s.id, c.term, c.def); added++;
+    const card = newCard(s.id, c.term, c.def); if (c.rating !== null && c.rating !== undefined) card.rating = c.rating;
+    for (const d of c.imgs || []) { const id = 'i' + uid(); if (await storeDataURL(id, d)) card.imgs.push(id); }
+    added++;
   }
-  save(true);
+  await save(true);
   return { added, skipped };
 }
 
-export function resetAll() { const keep = S.local.deviceId; S = emptyState(); S.local.deviceId = keep; save(true); }
+export async function resetAll() {
+  const keep = S.local.deviceId; S = emptyState(); S.local.deviceId = keep;
+  try { await idbClear('img'); } catch (_) {}
+  urlCache.forEach((u) => URL.revokeObjectURL(u)); urlCache.clear();
+  await save(true);
+}
