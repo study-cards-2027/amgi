@@ -1,6 +1,6 @@
 // 오프라인 지원: 앱 파일을 기기에 저장해 두고, 인터넷이 되면 뒤에서 새 버전으로 갱신
-const CACHE = 'amgi-v3';
-const FILES = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/store.js', 'js/study.js', 'js/ui.js', 'js/media.js',
+const CACHE = 'amgi-v4';
+const FILES = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/store.js', 'js/study.js', 'js/ui.js', 'js/media.js', 'js/kinds.js',
   'vendor/ts-fsrs.umd.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png'];
 
 self.addEventListener('install', (e) => {
