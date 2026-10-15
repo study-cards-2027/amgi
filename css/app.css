@@ -403,3 +403,59 @@ hr.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }
 .learn-bar span { font-size: 12px; color: var(--muted); font-weight: 700; }
 .mt.mt-ph { flex-direction: column; gap: 6px; padding: 6px; }
 .mt.mt-ph img { width: 100%; height: 78px; object-fit: cover; border-radius: 8px; pointer-events: none; }
+
+/* ---------- v2.1: 확인문제 · 빈칸 ---------- */
+.kind-tag { display: inline-block; font-size: 11px; font-weight: 800; padding: 1px 7px; border-radius: 999px; margin: 0 6px 4px 0; vertical-align: 2px; background: var(--surface-2); color: var(--muted); }
+.kind-tag.q { background: #e8efff; color: #3a5bd9; }
+.kind-tag.cz { background: #fff3d6; color: #a86a00; }
+[data-theme="dark"] .kind-tag.q { background: #24305a; color: #aebfff; }
+[data-theme="dark"] .kind-tag.cz { background: #4a3a14; color: #ffd47a; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .kind-tag.q { background: #24305a; color: #aebfff; } :root:not([data-theme="light"]) .kind-tag.cz { background: #4a3a14; color: #ffd47a; } }
+.q-list { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); white-space: pre-wrap; }
+.term-row .q-list { font-size: 14px; color: var(--muted); }
+.ex-txt { margin-top: 14px; font-size: .78em; color: var(--muted); white-space: pre-wrap; font-weight: 400; }
+.cz-text { white-space: pre-wrap; line-height: 2.05; text-align: left; width: 100%; }
+.cz { display: inline-flex; align-items: baseline; gap: 3px; border-radius: 8px; padding: 0 6px; margin: 0 2px; background: var(--surface-2); border-bottom: 2px solid var(--primary); line-height: 1.45; }
+.cz .n { font-size: .72em; font-weight: 800; color: var(--primary); }
+.cz .gap { display: inline-block; height: 1em; }
+.cz.tap { cursor: pointer; }
+.cz.tap:hover { background: var(--ok-soft); }
+.cz.open { background: #fff3c4; border-bottom-color: #e0a800; font-weight: 700; color: #4a3500; }
+.cz.open .n { color: #a86a00; }
+[data-theme="dark"] .cz.open { background: #4a3a14; color: #ffe2a0; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .cz.open { background: #4a3a14; color: #ffe2a0; } }
+.cz.tgt { background: var(--primary); border-bottom-color: var(--primary); }
+.cz.tgt .n, .cz.tgt .gap { color: #fff; font-weight: 800; }
+.term-row .cz-text { line-height: 1.9; }
+.term-row .cz { padding: 0 4px; }
+.qa .q.q-question .txt, .qa .q.q-cloze .txt { font-size: clamp(17px, 2.1vw, 22px); align-items: flex-start; line-height: 1.6; }
+.qa .q.q-question, .qa .q.q-cloze { min-height: 0; }
+.qa .ans.ex { border-top-color: var(--ok); }
+.qa .ans.ex .txt { font-size: clamp(15px, 1.9vw, 19px); }
+.grade4 .btn.sugg { outline: 3px solid var(--ng); outline-offset: 2px; }
+/* 편집기 */
+.seg.sm button { padding: 4px 10px; font-size: 13px; min-height: 32px; }
+.ed-head .ed-kind { margin-left: 10px; }
+.ed-q, .ed-cz { padding: 4px 16px 10px; display: grid; gap: 12px; }
+.ed-q textarea, .ed-cz textarea { width: 100%; }
+.qc-list { display: grid; gap: 6px; }
+.qc { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 10px; border: 2px solid transparent; }
+.qc.on { border-color: var(--ok); background: var(--ok-soft); }
+.qc input[type=radio] { width: 22px; height: 22px; flex: none; accent-color: var(--ok); }
+.qc .no { font-weight: 800; color: var(--muted); flex: none; }
+.qc .input { flex: 1; min-height: 40px; }
+.ed-q textarea, .ed-cz textarea {
+  border: 0; border-bottom: 2px solid var(--text); background: transparent; resize: none; outline: none; color: var(--text);
+  padding: 6px 0; min-height: 34px; overflow: hidden; line-height: 1.45; font: inherit;
+}
+.ed-q textarea:focus, .ed-cz textarea:focus { border-bottom-color: var(--primary); border-bottom-width: 3px; }
+.ed-q .cap, .ed-cz .cap { font-size: 12px; font-weight: 700; color: var(--muted); margin-top: 4px; }
+.ed-cz .cap[data-czinfo] { text-transform: none; font-weight: 600; white-space: pre-wrap; }
+@media (max-width: 640px) { .ed-head { flex-wrap: wrap; } .ed-head .ed-kind { margin-left: 6px; } }
+
+/* ---------- v2.2: 정답 돌려쓰기 ---------- */
+.asked { margin-top: 6px; font-size: 13px; color: var(--ng); }
+.ed-q [data-qmode] { justify-self: start; }
+.rot-cols { gap: 14px; }
+@media (max-width: 640px) { .rot-cols { grid-template-columns: 1fr; } }
+.ed-q .cap.warn { color: var(--ng); }

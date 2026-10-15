@@ -206,10 +206,29 @@ function tombCard(id, t = now()) {
 }
 export function deleteCard(id) { tombCard(id); save(); }
 
-export function newCard(setId, term, def, order) {
+export function newCard(setId, term, def, order, extra = null) {
   const id = uid(); const t = now();
   S.cards[id] = { id, setId, term, def, rating: null, imgs: [], order: order ?? cardsOf(setId).length, cu: t, p: blankProgress(), pu: t };
+  if (extra) applyKind(S.cards[id], extra);
   return S.cards[id];
+}
+// v2.1 카드 형식: kind 'question'(choices, answer) / 'cloze'. 기본 카드는 kind 없음.
+export function applyKind(c, x) {
+  const k = x.kind === 'question' || x.kind === 'cloze' ? x.kind : null;
+  if (!k) { delete c.kind; delete c.choices; delete c.answer; delete c.answers; delete c.wrong; delete c.group; return c; }
+  c.kind = k;
+  const strs = (a) => (Array.isArray(a) ? a : []).map((v) => String(v ?? '').trim());
+  if (k === 'question' && Array.isArray(x.answers)) {
+    // v2.2 정답 돌려쓰기
+    c.answers = strs(x.answers).filter(Boolean); c.wrong = strs(x.wrong).filter(Boolean);
+    if (x.group) c.group = String(x.group).trim(); else delete c.group;
+    delete c.choices; delete c.answer;
+  } else if (k === 'question') {
+    c.choices = strs(x.choices);
+    c.answer = Math.max(1, Math.min(Math.max(1, c.choices.length), parseInt(x.answer, 10) || 1));
+    delete c.answers; delete c.wrong; delete c.group;
+  } else { delete c.choices; delete c.answer; delete c.answers; delete c.wrong; delete c.group; }
+  return c;
 }
 export const blankProgress = () => ({ fsrs: null, ok: 0, ng: 0, wrong: false, streak: 0, last: 0 });
 
@@ -226,6 +245,8 @@ export function normalize() {
     if ('star' in c) delete c.star;
     if (c.rating === undefined) c.rating = null;
     if (!Array.isArray(c.imgs)) c.imgs = [];
+    if (c.kind === 'question' && Array.isArray(c.answers)) { if (!Array.isArray(c.wrong)) c.wrong = []; }
+    else if (c.kind === 'question') { if (!Array.isArray(c.choices)) c.choices = []; c.answer = parseInt(c.answer, 10) || 1; }
   }
 }
 export function setRating(kind, id, val) {
@@ -277,6 +298,15 @@ export async function removeImageIfUnused(id) {
 const blobToDataURL = (b) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(b); });
 const dataURLToBlob = async (d) => (await fetch(d)).blob();
 async function storeDataURL(id, d) { try { await putImage(await dataURLToBlob(d), id); return true; } catch (_) { return false; } }
+// v2.2 정답 돌려쓰기: 어떤 정답이 몇 번 나왔고(seen) 몇 번 맞혔는지(hits)
+export function noteRot(c, ans, ok) {
+  if (!c || !ans) return;
+  if (!c.p) c.p = blankProgress();
+  c.p.seen = c.p.seen || {}; c.p.hits = c.p.hits || {};
+  c.p.seen[ans] = (c.p.seen[ans] || 0) + 1;
+  if (ok) c.p.hits[ans] = (c.p.hits[ans] || 0) + 1;
+  touchProgress(c);
+}
 export function touchProgress(c) { c.pu = now(); if (!c.p) c.p = blankProgress(); save(); }
 
 // 세트 전체 편집 저장 (편집기에서) rows: [{id?, term, def}]
@@ -311,13 +341,16 @@ export function setSettings(patch) { Object.assign(S.settings, patch); S.setting
 export function recordTest(items, scopeLabel) {
   const grad = Math.max(1, +S.settings.gradStreak || 2);
   let ok = 0;
-  for (const [cid, good] of items) {
+  for (const [cid, good, ans] of items) {
     const c = S.cards[cid]; if (!c || c.del) continue;
     if (!c.p) c.p = blankProgress();
     if (good) {
       ok++; c.p.ok++;
-      if (c.p.wrong) { c.p.streak++; if (c.p.streak >= grad) { c.p.wrong = false; c.p.streak = 0; } }
-    } else { c.p.ng++; c.p.wrong = true; c.p.streak = 0; }
+      if (c.p.wrong) { c.p.streak++; if (c.p.streak >= grad) { c.p.wrong = false; c.p.streak = 0; delete c.p.miss; } }
+    } else {
+      c.p.ng++; c.p.wrong = true; c.p.streak = 0;
+      if (ans) { c.p.miss = c.p.miss || {}; c.p.miss[ans] = (c.p.miss[ans] || 0) + 1; } // 돌려쓰기 카드: 틀린 정답 처방
+    }
     c.p.last = now(); c.pu = now();
   }
   const id = uid();
@@ -354,7 +387,7 @@ export function parseImport(text) {
   try { data = JSON.parse(text.replace(/^﻿/, '')); }
   catch (e) { throw new Error('파일을 읽을 수 없습니다. 백업(.json) 또는 카드팩 파일인지 확인해 주세요.'); }
   if (data && data.type === APP_TYPE_BACKUP) return { kind: 'backup', data };
-  if (data && (data.type === APP_TYPE_PACK || Array.isArray(data.cards) && data.cards.every((c) => 'term' in c && ('set' in c || 'folder' in c)))) return { kind: 'pack', data };
+  if (data && (data.type === APP_TYPE_PACK || Array.isArray(data.cards) && data.cards.every((c) => ('term' in c || 'stem' in c || 'text' in c) && ('set' in c || 'folder' in c)))) return { kind: 'pack', data };
   throw new Error('이 앱의 백업 파일이나 카드팩 형식이 아닙니다.');
 }
 
@@ -417,13 +450,23 @@ function ensureFolderPath(names) {
   for (const n of names) { f = subfolders(parent).find((x) => x.name === n) || addFolder(n, parent); parent = f.id; }
   return f;
 }
+const CIRC_NO = '①②③④⑤⑥⑦⑧⑨⑩';
+const packAnswer = (a) => { const s = String(a ?? '').trim(); const k = CIRC_NO.indexOf(s[0]); return k >= 0 ? k + 1 : parseInt(s, 10) || 1; };
 export function previewPack(d) {
-  const rows = (d.cards || []).map((c) => ({
-    folder: splitPath(c.folder).join(' › '), set: String(c.set || '기본').trim(),
-    term: String(c.term ?? '').trim(), def: String(c.def ?? '').trim(),
-    rating: c.rating !== undefined && c.rating !== null && c.rating !== '' ? Math.max(0, Math.min(5, +c.rating)) : (c.star ? 5 : null),
-    imgs: Array.isArray(c.imgs) ? c.imgs.filter((x) => typeof x === 'string' && x.startsWith('data:image')) : [],
-  })).filter((c) => c.term || c.def || c.imgs.length);
+  const rows = (d.cards || []).map((c) => {
+    const kind = c.kind === 'question' || c.kind === 'q' ? 'question' : c.kind === 'cloze' ? 'cloze' : 'basic';
+    const r = {
+      folder: splitPath(c.folder).join(' › '), set: String(c.set || '기본').trim(), kind,
+      term: String((kind === 'question' ? c.stem ?? c.term : kind === 'cloze' ? c.text ?? c.term : c.term) ?? '').trim(),
+      def: String((kind === 'question' ? c.explain ?? c.def : kind === 'cloze' ? c.note ?? c.def : c.def) ?? '').trim(),
+      rating: c.rating !== undefined && c.rating !== null && c.rating !== '' ? Math.max(0, Math.min(5, +c.rating)) : (c.star ? 5 : null),
+      imgs: kind === 'cloze' ? [] : Array.isArray(c.imgs) ? c.imgs.filter((x) => typeof x === 'string' && x.startsWith('data:image')) : [],
+    };
+    const strip = (a) => (Array.isArray(a) ? a : []).map((x) => String(x ?? '').replace(/^\s*[①②③④⑤⑥⑦⑧⑨⑩]\s*/, '').trim()).filter(Boolean);
+    if (kind === 'question' && Array.isArray(c.answers) && strip(c.answers).length) { r.answers = strip(c.answers); r.wrong = strip(c.wrong); if (c.group) r.group = String(c.group); }
+    else if (kind === 'question') { r.choices = (Array.isArray(c.choices) ? c.choices : []).map((x) => String(x ?? '').replace(/^\s*[①②③④⑤⑥⑦⑧⑨⑩]\s*/, '').trim()); r.answer = packAnswer(c.answer); }
+    return r;
+  }).filter((c) => (c.kind === 'question' ? c.term && (c.answers ? c.wrong.length >= 1 : c.choices.length >= 2) : c.kind === 'cloze' ? /\{\{[\s\S]*?\}\}/.test(c.term) : c.term || c.def || c.imgs.length));
   return rows.map((c) => {
     const f = findFolderPath(splitPath(c.folder));
     const s = f && setsOf(f.id).find((x) => x.name === c.set);
@@ -438,7 +481,7 @@ export async function applyPack(rows) {
     const f = ensureFolderPath(splitPath(c.folder));
     const s = setsOf(f.id).find((x) => x.name === c.set) || addSet(f.id, c.set);
     if (cardsOf(s.id).some((x) => x.term === c.term && x.def === c.def)) { skipped++; continue; }
-    const card = newCard(s.id, c.term, c.def); if (c.rating !== null && c.rating !== undefined) card.rating = c.rating;
+    const card = newCard(s.id, c.term, c.def, undefined, c.kind !== 'basic' ? c : null); if (c.rating !== null && c.rating !== undefined) card.rating = c.rating;
     for (const d of c.imgs || []) { const id = 'i' + uid(); if (await storeDataURL(id, d)) card.imgs.push(id); }
     added++;
   }

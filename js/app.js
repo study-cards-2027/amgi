@@ -2,6 +2,7 @@ import * as st from './store.js';
 import * as study from './study.js';
 import { $, $$, esc, I, toast, ask, confirmBox, modal, menu, fmtDate, autoGrow, download, readFile, starsHTML, pickRating } from './ui.js';
 import { photoBlock, hydrate, fileToStoredImage, openViewer } from './media.js';
+import { kindOf, listHTML, clozeAnswers, qChoices, qAnswer, circ, plainA, plainB, KIND_LABEL, isRot, rotAnswers } from './kinds.js';
 
 const view = () => $('#view');
 const go = (h) => { if (location.hash === h) route(); else location.hash = h; };
@@ -216,7 +217,7 @@ function setView(sid, q = {}) {
     <a class="btn sm primary" href="#/edit/${sid}">${I.edit} 카드 편집</a>
   </div>
   <div class="term-list" style="margin-top:12px">
-    ${cs.map((c) => { const r = st.effRating(c); return `<div class="term-row ${c.p?.wrong ? 'wrong' : ''}"><div class="a">${esc(c.term)}${(c.imgs || []).length ? `<div class="ph-row">${photoBlock(c.imgs, { compact: true })}<span class="small muted" style="align-self:center">사진 ${c.imgs.length}장</span></div>` : ''}</div><div class="b">${esc(c.def)}</div>
+    ${cs.map((c) => { const r = st.effRating(c); return `<div class="term-row ${c.p?.wrong ? 'wrong' : ''}"><div class="a">${listHTML(c).a}${(c.imgs || []).length ? `<div class="ph-row">${photoBlock(c.imgs, { compact: true })}<span class="small muted" style="align-self:center">사진 ${c.imgs.length}장</span></div>` : ''}</div><div class="b">${listHTML(c).b}</div>
       <div class="acts"><button class="rate-btn" data-rate="${c.id}" title="별점">${starsHTML(r.v, r.inherited)}</button>
       <a class="icon-btn" href="#/edit/${sid}?focus=${c.id}" title="편집">${I.edit}</a></div></div>`; }).join('')}
   </div>
@@ -253,29 +254,43 @@ async function moveSet(sid) {
 }
 
 // ================================================================ 카드 편집기 (퀴즐렛식, 자동 저장)
+// v2.1: 카드마다 형식 선택 — 기본(용어/정의) · 확인문제(문제 + 보기 5개 + 정답 + 해설) · 빈칸(본문에 {{정답}})
+const blankChoices = () => ['', '', '', '', ''];
 function editor(sid, q = {}) {
   const s = st.S.sets[sid]; if (!s || s.del) return go('#/');
   const f = st.S.folders[s.folderId];
-  let rows = st.cardsOf(sid).map((c) => ({ id: c.id, term: c.term, def: c.def, imgs: (c.imgs || []).slice() }));
-  if (!rows.length) rows = [{ term: '', def: '', imgs: [] }, { term: '', def: '', imgs: [] }, { term: '', def: '', imgs: [] }];
+  const toRow = (c) => ({ id: c.id, kind: kindOf(c), term: c.term, def: c.def, imgs: (c.imgs || []).slice(),
+    choices: kindOf(c) === 'question' && !isRot(c) ? [...qChoices(c), ...blankChoices()].slice(0, Math.max(5, qChoices(c).length)) : blankChoices(), answer: kindOf(c) === 'question' && !isRot(c) ? qAnswer(c) : 1,
+    rot: isRot(c), ansText: isRot(c) ? rotAnswers(c).join('\n') : '', wrongText: isRot(c) ? (c.wrong || []).join('\n') : '', group: c.group || '' });
+  const empty = (kind = 'basic', rot = false) => ({ kind, term: '', def: '', imgs: [], choices: blankChoices(), answer: 1, rot, ansText: '', wrongText: '', group: '' });
+  const lines = (t) => String(t || '').split('\n').map((x) => x.trim()).filter(Boolean);
+  let rows = st.cardsOf(sid).map(toRow);
+  if (!rows.length) rows = [empty(), empty(), empty()];
   const dropped = new Set(); // 편집 중 뺀 사진 (저장 후 어디에도 안 쓰이면 지움)
   const removed = new Set();
   let dirty = false, timer = null;
 
+  const isEmpty = (r) => !r.term.trim() && !r.def.trim() && !(r.imgs || []).length && !(r.kind === 'question' && (r.rot ? lines(r.ansText).length || lines(r.wrongText).length : r.choices.some((x) => x.trim())));
+  const kindData = (r) => (r.kind === 'question' && r.rot ? { kind: 'question', answers: lines(r.ansText), wrong: lines(r.wrongText), group: r.group }
+    : r.kind === 'question' ? { kind: 'question', choices: (() => { const ch = r.choices.map((x) => x.trim()); while (ch.length > 2 && !ch[ch.length - 1] && ch.length > r.answer) ch.pop(); return ch; })(), answer: r.answer } : { kind: r.kind });
+  const sig = (o) => JSON.stringify([o.kind || 'basic', o.choices || null, o.kind === 'question' && o.choices ? o.answer : null, o.answers || null, o.wrong || null, o.group || null]);
   const flush = () => {
     clearTimeout(timer); if (!dirty) return; dirty = false;
-    // 순서/내용 저장
     let order = 0;
     $$('.ed-row').forEach((el) => {
       const r = rows[+el.dataset.i]; if (!r) return;
-      const term = r.term.trim(), def = r.def.trim(); const imgs = r.imgs || [];
+      const term = r.term.trim(), def = r.def.trim(); const imgs = r.kind === 'cloze' ? [] : (r.imgs || []);
+      const kd = kindData(r);
       if (r.id && st.S.cards[r.id] && !st.S.cards[r.id].del) {
         const c = st.S.cards[r.id];
-        if (!term && !def && !imgs.length) { st.deleteCard(r.id); r.id = null; return; }
+        if (isEmpty(r)) { st.deleteCard(r.id); r.id = null; return; }
         const sameImgs = (c.imgs || []).join(',') === imgs.join(',');
-        if (c.term !== term || c.def !== def || c.order !== order || !sameImgs) { c.term = term; c.def = def; c.order = order; c.imgs = imgs.slice(); c.cu = Date.now(); }
+        const before = sig(c);
+        if (c.term !== term || c.def !== def || c.order !== order || !sameImgs || before !== sig({ ...kd, kind: kd.kind === 'basic' ? 'basic' : kd.kind })) {
+          c.term = term; c.def = def; c.order = order; c.imgs = imgs.slice(); st.applyKind(c, kd); c.cu = Date.now();
+        }
         order++;
-      } else if (term || def || imgs.length) { const c = st.newCard(sid, term, def, order); c.imgs = imgs.slice(); r.id = c.id; order++; }
+      } else if (!isEmpty(r)) { const c = st.newCard(sid, term, def, order, kd.kind === 'basic' ? null : kd); c.imgs = imgs.slice(); r.id = c.id; order++; }
     });
     for (const id of removed) st.deleteCard(id);
     removed.clear(); st.save(true);
@@ -286,16 +301,41 @@ function editor(sid, q = {}) {
   const touch = () => { dirty = true; const sv = $('#saved'); if (sv) sv.textContent = '저장 중…'; clearTimeout(timer); timer = setTimeout(flush, 600); };
   leaveHook = flush;
 
-  const rowHtml = (r, i, n) => `<div class="ed-row" data-i="${i}"><div class="ed-head"><span>${n}</span><span class="spacer"></span>
-      <button class="icon-btn" data-swap title="용어↔정의 바꾸기">${I.flip}</button><button class="icon-btn" data-del title="삭제">${I.trash}</button></div>
-    <div class="ed-body"><div><textarea rows="1" data-k="term" placeholder="용어 (A)">${esc(r.term)}</textarea><div class="cap">용어</div></div>
-    <div><textarea rows="1" data-k="def" placeholder="정의 (B)">${esc(r.def)}</textarea><div class="cap">정의</div></div></div>
-    <div class="ed-ph">${phHtml(r)}</div></div>`;
+  const kindSeg = (r) => `<div class="seg sm ed-kind">${[['basic', '기본'], ['question', '확인문제'], ['cloze', '빈칸']].map(([k, l]) => `<button data-kind="${k}" class="${r.kind === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  const clozeInfo = (r) => { const a = clozeAnswers(r.term); return a.length ? `빈칸 ${a.length}개 · ${a.map((t, k) => `${circ(k + 1)} ${esc(t)}`).join('  ')}` : '빈칸이 없어요. 가릴 글자를 고르고 「빈칸으로」를 누르세요.'; };
+  const bodyHtml = (r, i) => {
+    const qmode = `<div class="seg sm" data-qmode><button data-rot="0" class="${r.rot ? '' : 'on'}">보기 고정</button><button data-rot="1" class="${r.rot ? 'on' : ''}">정답 돌려쓰기</button></div>`;
+    if (r.kind === 'question' && r.rot) {
+      const na = lines(r.ansText).length, nw = lines(r.wrongText).length;
+      return `<div class="ed-q">${qmode}
+      <div><textarea rows="2" data-k="term" placeholder="문제 (증례 + 질문)">${esc(r.term)}</textarea><div class="cap">문제</div></div>
+      <div class="grid2 rot-cols">
+        <div><textarea rows="3" data-k="ansText" placeholder="육신산&#10;익황산&#10;구등음">${esc(r.ansText)}</textarea><div class="cap" data-rotinfo="a">정답 후보 ${na}개 · 한 줄에 하나 · 나올 때마다 하나씩 돌아가며 정답</div></div>
+        <div><textarea rows="3" data-k="wrongText" placeholder="오답 처방을 한 줄에 하나씩 (6~8개 추천)">${esc(r.wrongText)}</textarea><div class="cap ${nw < 4 ? 'warn' : ''}" data-rotinfo="w">오답 풀 ${nw}개 · 매번 4개를 뽑아요${nw < 4 ? ' (4개 미만이면 보기가 줄어요)' : ''}</div></div>
+      </div>
+      <div><textarea rows="1" data-k="def" placeholder="해설 (근거·감별 증상, 선택)">${esc(r.def)}</textarea><div class="cap">해설</div></div></div>`;
+    }
+    if (r.kind === 'question') return `<div class="ed-q">${qmode}
+      <div><textarea rows="2" data-k="term" placeholder="문제 (증례 + 질문)">${esc(r.term)}</textarea><div class="cap">문제</div></div>
+      <div class="qc-list">${r.choices.map((t, k) => `<label class="qc ${r.answer === k + 1 ? 'on' : ''}"><input type="radio" name="ans-${i}" value="${k + 1}" ${r.answer === k + 1 ? 'checked' : ''} title="정답으로"><span class="no">${circ(k + 1)}</span><input class="input" data-c="${k}" value="${esc(t)}" placeholder="보기 ${k + 1}"></label>`).join('')}
+        <div class="cap">보기 · 왼쪽 동그라미로 정답 선택</div></div>
+      <div><textarea rows="1" data-k="def" placeholder="해설 (근거·감별 증상, 선택)">${esc(r.def)}</textarea><div class="cap">해설</div></div></div>`;
+    if (r.kind === 'cloze') return `<div class="ed-cz">
+      <div class="row" style="gap:6px;margin-bottom:6px"><button class="btn sm" data-wrap>［ ］ 빈칸으로</button><button class="btn sm ghost" data-unwrap>빈칸 풀기</button><span class="small muted">본문에서 글자를 고른 뒤 누르세요 · 직접 {{정답}}으로 써도 돼요</span></div>
+      <div><textarea rows="3" data-k="term" placeholder="본문 (예: 미숙아는 만삭아보다 {{호흡이 빠르고}} 변화폭도 큼)">${esc(r.term)}</textarea><div class="cap" data-czinfo>${clozeInfo(r)}</div></div>
+      <div><textarea rows="1" data-k="def" placeholder="메모 (출처·쪽수 등, 선택)">${esc(r.def)}</textarea><div class="cap">메모</div></div></div>`;
+    return `<div class="ed-body"><div><textarea rows="1" data-k="term" placeholder="용어 (A)">${esc(r.term)}</textarea><div class="cap">용어</div></div>
+    <div><textarea rows="1" data-k="def" placeholder="정의 (B)">${esc(r.def)}</textarea><div class="cap">정의</div></div></div>`;
+  };
+  const rowHtml = (r, i, n) => `<div class="ed-row" data-i="${i}"><div class="ed-head"><span class="ed-n">${n}</span>${kindSeg(r)}<span class="spacer"></span>
+      ${r.kind === 'basic' ? `<button class="icon-btn" data-swap title="용어↔정의 바꾸기">${I.flip}</button>` : ''}<button class="icon-btn" data-del title="삭제">${I.trash}</button></div>
+    ${bodyHtml(r, i)}
+    ${r.kind === 'cloze' ? '' : `<div class="ed-ph">${phHtml(r)}</div>`}</div>`;
   const phHtml = (r) => `${(r.imgs || []).map((id, k) => `<div class="t"><img data-img="${esc(id)}" data-k="${k}" alt=""><button data-rm="${k}" title="사진 빼기">×</button></div>`).join('')}
-      <button class="add" data-addph>＋ 사진${(r.imgs || []).length ? '' : '<br><span style="font-weight:600;font-size:11px">(용어 쪽)</span>'}</button>
+      <button class="add" data-addph>＋ 사진${(r.imgs || []).length ? '' : `<br><span style="font-weight:600;font-size:11px">(${r.kind === 'question' ? '문제' : '용어'} 쪽)</span>`}</button>
       <input type="file" accept="image/*" multiple hidden data-file>`;
   const bindPh = (el) => {
-    const i = +el.dataset.i; const box = $('.ed-ph', el); const r = rows[i];
+    const i = +el.dataset.i; const box = $('.ed-ph', el); const r = rows[i]; if (!box) return;
     box.innerHTML = phHtml(r); hydrate(box);
     const file = $('[data-file]', box);
     $('[data-addph]', box).onclick = () => file.click();
@@ -315,28 +355,85 @@ function editor(sid, q = {}) {
       <a class="btn primary" href="#/s/${sid}">완료</a></div>
     <div id="rows">${rows.map((r, i) => rowHtml(r, i, i + 1)).join('')}</div>
     <button class="ed-add" id="add"><span>+ 카드 추가</span></button>
-    <p class="muted small" style="text-align:center">마지막 칸에서 Tab을 누르면 새 카드가 생겨요. 줄바꿈은 Enter.</p>`;
+    <p class="muted small" style="text-align:center">카드마다 위쪽에서 형식(기본 · 확인문제 · 빈칸)을 고를 수 있어요. 마지막 칸에서 Tab을 누르면 새 카드가 생겨요.</p>`;
     bind();
   };
-  const renumber = () => $$('.ed-row').forEach((el, k) => { $('.ed-head span', el).textContent = k + 1; });
+  const renumber = () => $$('.ed-row').forEach((el, k) => { $('.ed-n', el).textContent = k + 1; });
+  const redrawRow = (el) => {
+    const i = +el.dataset.i; const wrap = document.createElement('div');
+    wrap.innerHTML = rowHtml(rows[i], i, $('.ed-n', el).textContent);
+    const nel = wrap.firstElementChild; el.replaceWith(nel); bindRow(nel); return nel;
+  };
+  // 본문 선택 영역을 {{ }}로 감싸기 / 풀기
+  const wrapSel = (ta, r, unwrap) => {
+    let a = ta.selectionStart, b = ta.selectionEnd; const v = ta.value;
+    if (unwrap) {
+      // 커서·선택이 걸친 {{…}}를 찾아 괄호만 지움
+      const re = /\{\{([\s\S]*?)\}\}/g; let m, out = v, shift = 0, hit = false;
+      while ((m = re.exec(v))) {
+        const s0 = m.index, e0 = s0 + m[0].length;
+        if (b >= s0 && a <= e0) { out = out.slice(0, s0 - shift) + m[1] + out.slice(e0 - shift); shift += 4; hit = true; }
+      }
+      if (!hit) return toast('풀 빈칸 안에 커서를 두세요');
+      ta.value = out;
+    } else {
+      while (a < b && /\s/.test(v[a])) a++; while (b > a && /\s/.test(v[b - 1])) b--;
+      if (a === b) return toast('먼저 빈칸으로 만들 글자를 고르세요');
+      if (/\{\{|\}\}/.test(v.slice(a, b))) return toast('이미 빈칸이 들어 있어요');
+      ta.value = v.slice(0, a) + '{{' + v.slice(a, b) + '}}' + v.slice(b);
+      ta.setSelectionRange(b + 4, b + 4);
+    }
+    r.term = ta.value; autoGrow(ta); touch();
+  };
   const bindRow = (el) => {
-    const i = +el.dataset.i;
+    const i = +el.dataset.i; const r = rows[i];
     $$('textarea', el).forEach((ta) => {
       autoGrow(ta);
-      ta.oninput = () => { rows[i][ta.dataset.k] = ta.value; autoGrow(ta); touch(); };
+      ta.oninput = () => {
+        r[ta.dataset.k] = ta.value; autoGrow(ta); touch();
+        if (r.kind === 'cloze' && ta.dataset.k === 'term') { const ci = $('[data-czinfo]', el); if (ci) ci.innerHTML = clozeInfo(r); }
+      };
       ta.onkeydown = (e) => {
         if (e.key === 'Tab' && !e.shiftKey && ta.dataset.k === 'def' && el === $$('.ed-row').at(-1)) { e.preventDefault(); addRow(); }
       };
     });
+    $$('[data-c]', el).forEach((inp) => (inp.oninput = () => { r.choices[+inp.dataset.c] = inp.value; touch(); }));
+    $$('input[type=radio]', el).forEach((rb) => (rb.onchange = () => { r.answer = +rb.value; $$('.qc', el).forEach((x, k) => x.classList.toggle('on', k + 1 === r.answer)); touch(); }));
+    const ta = $('textarea[data-k="term"]', el);
+    const wb = $('[data-wrap]', el), ub = $('[data-unwrap]', el);
+    [[wb, false], [ub, true]].forEach(([btn, un]) => { if (!btn) return; btn.onpointerdown = (e) => e.preventDefault(); btn.onclick = () => { wrapSel(ta, r, un); const ci = $('[data-czinfo]', el); if (ci) ci.innerHTML = clozeInfo(r); }; });
+    $$('[data-rot]', el).forEach((b) => (b.onclick = () => {
+      const to = b.dataset.rot === '1'; if (r.rot === to) return;
+      if (to && !r.ansText.trim()) { // 고정 보기 → 돌려쓰기: 정답은 정답 후보로, 나머지 보기는 오답 풀로
+        const ch = r.choices.map((x) => x.trim());
+        r.ansText = ch[r.answer - 1] || ''; r.wrongText = ch.filter((x, k) => x && k !== r.answer - 1).join('\n');
+      } else if (!to && !r.choices.some((x) => x.trim())) {
+        r.choices = [...lines(r.ansText).slice(0, 1), ...lines(r.wrongText).slice(0, 4)]; while (r.choices.length < 5) r.choices.push(''); r.answer = 1;
+      }
+      r.rot = to; redrawRow(el); dirty = true; flush();
+    }));
+    $$('textarea[data-k="ansText"], textarea[data-k="wrongText"]', el).forEach((ta) => ta.addEventListener('input', () => {
+      const na = lines(r.ansText).length, nw = lines(r.wrongText).length;
+      const ia = $('[data-rotinfo="a"]', el), iw = $('[data-rotinfo="w"]', el);
+      if (ia) ia.textContent = `정답 후보 ${na}개 · 한 줄에 하나 · 나올 때마다 하나씩 돌아가며 정답`;
+      if (iw) { iw.textContent = `오답 풀 ${nw}개 · 매번 4개를 뽑아요${nw < 4 ? ' (4개 미만이면 보기가 줄어요)' : ''}`; iw.classList.toggle('warn', nw < 4); }
+    }));
+    $$('[data-kind]', el).forEach((b) => (b.onclick = () => {
+      if (r.kind === b.dataset.kind) return;
+      if (b.dataset.kind === 'cloze' && (r.imgs || []).length) toast('빈칸 카드에는 사진이 들어가지 않아요. 사진은 형식을 되돌리면 다시 보여요.', 3000);
+      r.kind = b.dataset.kind; redrawRow(el); dirty = true; flush();
+    }));
     bindPh(el);
-    $('[data-del]', el).onclick = () => { if (rows[i].id) removed.add(rows[i].id); (rows[i].imgs || []).forEach((id) => dropped.add(id)); rows[i] = null; el.remove(); renumber(); dirty = true; flush(); };
-    $('[data-swap]', el).onclick = () => {
-      const r = rows[i]; [r.term, r.def] = [r.def, r.term];
+    $('[data-del]', el).onclick = () => { if (r.id) removed.add(r.id); (r.imgs || []).forEach((id) => dropped.add(id)); rows[i] = null; el.remove(); renumber(); dirty = true; flush(); };
+    const sw = $('[data-swap]', el);
+    if (sw) sw.onclick = () => {
+      [r.term, r.def] = [r.def, r.term];
       const [a, b] = $$('textarea', el); a.value = r.term; b.value = r.def; autoGrow(a); autoGrow(b); touch();
     };
   };
   const addRow = () => {
-    rows.push({ term: '', def: '', imgs: [] });
+    const last = rows.filter(Boolean).at(-1);
+    rows.push(empty(last ? last.kind : 'basic', !!(last && last.kind === 'question' && last.rot)));
     const i = rows.length - 1;
     const wrap = document.createElement('div');
     wrap.innerHTML = rowHtml(rows[i], i, $$('.ed-row').length + 1);
@@ -460,14 +557,16 @@ export async function importFile(file) {
   const rows = st.previewPack(parsed.data);
   const add = rows.filter((r) => !r.dup).length, dup = rows.length - add;
   const newSets = [...new Set(rows.filter((r) => r.newSet).map((r) => `${r.folder} › ${r.set}`))];
+  const kinds = { basic: 0, question: 0, cloze: 0 }; rows.forEach((r) => kinds[r.kind]++);
   view().innerHTML = `
   <div class="crumb"><a href="#/">홈</a> › <a href="#/import">가져오기</a></div>
   <h1>카드팩 확인</h1>
   <p class="muted">${esc(file.name)} · 카드 ${rows.length}장${parsed.data.title ? ` · ${esc(parsed.data.title)}` : ''}</p>
   ${newSets.length ? `<div class="banner">새로 만들어질 단원: ${newSets.map(esc).join(', ')}</div>` : ''}
-  <p class="small muted">표의 용어·정의 칸을 눌러 바로 고칠 수 있어요. 회색 줄은 이미 같은 카드가 있어서 건너뜁니다.</p>
-  <div class="pv"><table><tr><th>폴더 › 단원</th><th>용어 (A)</th><th>정의 (B)</th><th></th></tr>
-  ${rows.map((r, i) => `<tr class="${r.dup ? 'dup' : ''}" data-i="${i}"><td class="muted">${esc(r.folder)} › ${esc(r.set)}</td><td contenteditable data-k="term">${esc(r.term)}</td><td contenteditable data-k="def">${esc(r.def)}</td>
+  <p class="small muted">기본 카드는 표의 용어·정의 칸을 눌러 바로 고칠 수 있어요(확인문제·빈칸은 추가한 뒤 카드 편집에서). 회색 줄은 이미 같은 카드가 있어서 건너뜁니다.</p>
+  ${kinds.question || kinds.cloze ? `<p class="small">형식: ${Object.entries(kinds).filter(([, n]) => n).map(([k, n]) => `${KIND_LABEL[k]} ${n}장`).join(' · ')}</p>` : ''}
+  <div class="pv"><table><tr><th>폴더 › 단원</th><th>용어 · 문제 · 본문</th><th>정의 · 정답</th><th></th></tr>
+  ${rows.map((r, i) => `<tr class="${r.dup ? 'dup' : ''}" data-i="${i}"><td class="muted">${esc(r.folder)} › ${esc(r.set)}${r.kind !== 'basic' ? `<br><span class="kind-tag ${r.kind === 'question' ? 'q' : 'cz'}">${KIND_LABEL[r.kind]}</span>` : ''}</td>${r.kind === 'basic' ? `<td contenteditable data-k="term">${esc(r.term)}</td><td contenteditable data-k="def">${esc(r.def)}</td>` : `<td>${esc(plainA(r))}</td><td>${esc(plainB(r))}</td>`}
     <td><label class="chk"><input type="checkbox" ${r.dup ? 'disabled' : 'checked'} data-use></label></td></tr>`).join('')}</table></div>
   <div class="row end" style="margin-top:14px"><a class="btn ghost" href="#/import">취소</a><button class="btn primary" id="apply">${add}장 추가${dup ? ` (중복 ${dup}장 제외)` : ''}</button></div>`;
   $$('.pv td[contenteditable]').forEach((td) => (td.oninput = () => { rows[+td.parentElement.dataset.i][td.dataset.k] = td.innerText.trim(); }));
@@ -538,7 +637,7 @@ function picker(q = {}) {
     <h1>학습하기</h1>
     <div class="seg" id="msg" style="margin:10px 0 4px">
       ${[['flash', '낱말카드'], ['learn', '학습하기'], ['test', '테스트'], ['mc', '객관식'], ['match', '매칭'], ['review', '복습(Anki)']].map(([k, l]) => `<button data-v="${k}" class="${P.mode === k ? 'on' : ''}">${l}</button>`).join('')}</div>
-    <p class="muted small">${{ flash: '카드를 넘기며 외워요. 오른쪽으로 밀면 "알고 있음", 왼쪽은 "학습 중". 사진은 모두 보여요.', learn: '틀린 카드는 조금 뒤에 다시 나와요. 전부 맞혀야 끝나요.', test: '문제를 보고 떠올린 뒤 정답을 확인하고 맞음/틀림을 직접 표시해요. 틀린 문제는 오답노트로 갑니다.', mc: '국시처럼 보기 5개 중 정답을 골라요. 보기는 같은 단원·폴더의 다른 카드 답으로 자동으로 만들어져요. 틀린 문제는 오답노트로 갑니다.', match: '용어와 정의 짝을 빠르게 맞히는 게임이에요.', review: 'Anki의 FSRS 알고리즘으로 잊어버릴 때쯤 다시 보여줘요. 매일 하면 가장 효율적이에요.' }[P.mode]}${['test', 'mc', 'learn', 'review', 'match'].includes(P.mode) ? ' 사진이 여러 장인 카드는 한 장만 무작위로 나와요.' : ''}</p>
+    <p class="muted small">${{ flash: '카드를 넘기며 외워요. 오른쪽으로 밀면 "알고 있음", 왼쪽은 "학습 중". 사진은 모두 보여요.', learn: '틀린 카드는 조금 뒤에 다시 나와요. 전부 맞혀야 끝나요.', test: '문제를 보고 떠올린 뒤 정답을 확인하고 맞음/틀림을 직접 표시해요. 틀린 문제는 오답노트로 갑니다.', mc: '국시처럼 보기 5개 중 정답을 골라요. 보기는 같은 단원·폴더의 다른 카드 답으로 자동으로 만들어져요. 틀린 문제는 오답노트로 갑니다.', match: '용어와 정의 짝을 빠르게 맞히는 게임이에요. 확인문제·빈칸 카드는 빠져요.', review: 'Anki의 FSRS 알고리즘으로 잊어버릴 때쯤 다시 보여줘요. 매일 하면 가장 효율적이에요.' }[P.mode]}${['test', 'mc', 'learn', 'review'].includes(P.mode) ? ' 확인문제 카드는 정해진 보기 중에서 골라요.' : ''}${P.mode === 'mc' || (P.mode === 'learn' && P.answer === 'mc') ? ' 빈칸 카드는 빈칸 하나를 골라 다른 빈칸들의 답을 보기로 내요.' : ['test', 'review', 'learn'].includes(P.mode) ? ' 빈칸 카드는 빈칸을 눌러 하나씩 열어 보고 채점해요.' : ''}${['test', 'mc', 'learn', 'review', 'match'].includes(P.mode) ? ' 사진이 여러 장인 카드는 한 장만 무작위로 나와요.' : ''}</p>
     <div class="row" style="margin-top:18px"><h2 style="margin:0">범위</h2><span class="spacer"></span>
       <button class="btn sm ghost" id="selAll">전체 선택</button><button class="btn sm ghost" id="selNone">선택 해제</button></div>
     <div class="tree" style="margin-top:10px">
@@ -607,7 +706,7 @@ function wrongView() {
   ${keys.map((k) => { const s = st.S.sets[k]; const fl = st.folderPathLabel(s.folderId); const cs = groups.get(k);
     return `<div class="row" style="margin-top:22px"><h2 style="margin:0">${esc(fl)} › ${esc(s.name)}</h2><span class="pill ng">${cs.length}</span><span class="spacer"></span>
       <button class="btn sm" data-tset="${k}">이 단원 오답 시험</button></div>
-      <div class="term-list" style="margin-top:10px">${cs.map((c) => `<div class="term-row wrong"><div class="a">${esc(c.term)}${(c.imgs || []).length ? `<div class="ph-row">${photoBlock(c.imgs, { compact: true })}</div>` : ''}</div><div class="b">${esc(c.def)}<div class="small muted" style="margin-top:6px">틀림 ${c.p.ng}회 · 연속 정답 ${c.p.streak}/${grad}</div></div>
+      <div class="term-list" style="margin-top:10px">${cs.map((c) => `<div class="term-row wrong"><div class="a">${listHTML(c).a}${(c.imgs || []).length ? `<div class="ph-row">${photoBlock(c.imgs, { compact: true })}</div>` : ''}</div><div class="b">${listHTML(c).b}<div class="small muted" style="margin-top:6px">틀림 ${c.p.ng}회 · 연속 정답 ${c.p.streak}/${grad}</div>${c.p.miss && Object.keys(c.p.miss).length ? `<div class="asked">틀린 정답: ${Object.entries(c.p.miss).map(([t, n]) => `<b>${esc(t)}</b>${n > 1 ? ` ×${n}` : ''}`).join(', ')}</div>` : ''}</div>
         <div class="acts"><button class="btn sm ghost" data-clear="${c.id}" title="오답노트에서 빼기">✓ 외웠음</button></div></div>`).join('')}</div>`; }).join('')}
   ${ws.length ? '' : '<div class="empty"><div class="big">🎯</div><p>오답이 없어요!<br>테스트에서 틀린 문제가 여기에 모입니다.</p><a class="btn primary" href="#/study?mode=test">테스트 보러 가기</a></div>'}`;
   hydrate(view());
@@ -615,7 +714,7 @@ function wrongView() {
   const tm = $('#tmc'); if (tm) tm.onclick = () => study.start('mc', ws, { title: '오답노트 전체', shuffle: true, dir: 'term' });
   const fl = $('#fl'); if (fl) fl.onclick = () => study.start('flash', ws, { title: '오답노트', shuffle: true, dir: 'term' });
   $$('[data-tset]').forEach((b) => (b.onclick = () => { const s = st.S.sets[b.dataset.tset]; study.start('test', groups.get(b.dataset.tset), { title: `${st.S.folders[s.folderId].name} ${s.name} 오답`, shuffle: true, dir: 'term' }); }));
-  $$('[data-clear]').forEach((b) => (b.onclick = () => { const c = st.S.cards[b.dataset.clear]; c.p.wrong = false; c.p.streak = 0; st.touchProgress(c); toast('오답노트에서 뺐어요'); wrongView(); }));
+  $$('[data-clear]').forEach((b) => (b.onclick = () => { const c = st.S.cards[b.dataset.clear]; c.p.wrong = false; c.p.streak = 0; delete c.p.miss; st.touchProgress(c); toast('오답노트에서 뺐어요'); wrongView(); }));
 }
 
 // ================================================================ 통계
@@ -680,6 +779,7 @@ async function settingsView() {
     <div class="switch"><span>국가고시 날짜</span><input class="input" type="date" id="exam" value="${esc(S.examDate)}" style="width:auto"></div>
     <div class="switch"><span>복습: 하루 새 카드 수</span><input class="input" type="number" min="0" max="999" id="npd" value="${S.newPerDay}" style="width:100px"></div>
     <div class="switch"><span>오답노트에서 빠지는 연속 정답 수</span><input class="input" type="number" min="1" max="10" id="grad" value="${S.gradStreak}" style="width:100px"></div>
+    <div class="switch"><span>확인문제 보기 순서 섞기 <span class="muted small">(끄면 교재·국시 문제 순서 그대로)</span></span><label class="toggle"><input type="checkbox" id="qsh" ${S.qShuffle ? 'checked' : ''}><span></span></label></div>
   </div>
   <h2>화면</h2>
   <div class="card"><div class="switch"><span>테마</span><div class="seg" id="thm">${[['auto', '자동'], ['light', '밝게'], ['dark', '어둡게']].map(([k, l]) => `<button data-v="${k}" class="${theme === k ? 'on' : ''}">${l}</button>`).join('')}</div></div></div>
@@ -690,7 +790,7 @@ async function settingsView() {
   </div>
   <h2>위험 구역</h2>
   <div class="card"><button class="btn ng" id="reset">이 기기의 모든 데이터 삭제</button></div>
-  <p class="muted small" style="margin-top:24px">한의 암기노트 v2.0 · 복습 일정은 Anki의 FSRS 알고리즘(ts-fsrs, MIT)을 사용합니다.</p>`;
+  <p class="muted small" style="margin-top:24px">한의 암기노트 v2.2 · 복습 일정은 Anki의 FSRS 알고리즘(ts-fsrs, MIT)을 사용합니다.</p>`;
 
   const fname = (ext) => { const d = new Date(); const z = (n) => String(n).padStart(2, '0'); return `암기노트-백업-${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}.${ext}`; };
   $('#exp').onclick = async () => { toast('백업 파일 만드는 중…'); download(fname('json'), JSON.stringify(await st.exportBackup(), null, 1)); st.markExported(); toast('백업 파일을 저장했어요 (다운로드 폴더)'); setTimeout(settingsView, 600); };
@@ -704,6 +804,7 @@ async function settingsView() {
   $('#file').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importFile(f); };
   $('#exam').onchange = (e) => { st.setSettings({ examDate: e.target.value }); toast('저장했어요'); };
   $('#npd').onchange = (e) => { st.setSettings({ newPerDay: Math.max(0, +e.target.value || 0) }); toast('저장했어요'); };
+  $('#qsh').onchange = (e) => { st.setSettings({ qShuffle: e.target.checked }); toast('저장했어요'); };
   $('#grad').onchange = (e) => { st.setSettings({ gradStreak: Math.min(10, Math.max(1, +e.target.value || 2)) }); toast('저장했어요'); };
   $$('#thm button').forEach((b) => (b.onclick = () => { st.S.local.theme = b.dataset.v; st.save(); applyTheme(); settingsView(); }));
   $('#reset').onclick = async () => {
