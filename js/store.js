@@ -173,6 +173,16 @@ export function addSet(folderId, name) {
   S.sets[id] = { id, folderId, name: name.trim(), order: nextOrder(setsOf(folderId)), u: now() };
   save(); return S.sets[id];
 }
+// v2.3: 여러 단원을 한꺼번에 다른 폴더로
+export function moveSets(ids, folderId) {
+  if (!S.folders[folderId]) return 0;
+  let order = nextOrder(setsOf(folderId)), n = 0; const t = now();
+  for (const id of ids) {
+    const s = S.sets[id]; if (!s || s.del || s.folderId === folderId) continue;
+    s.folderId = folderId; s.order = order++; s.u = t; n++;
+  }
+  save(); return n;
+}
 export function rename(kind, id, name) {
   const o = (kind === 'folder' ? S.folders : S.sets)[id];
   if (!o) return; o.name = name.trim(); o.u = now(); save();
@@ -444,7 +454,13 @@ function findFolderPath(names) {
   }
   return null;
 }
-function ensureFolderPath(names) {
+function ensureFolderPath(names, baseId = null) {
+  if (baseId && S.folders[baseId]) {
+    // v2.3: 고른 폴더 안에 카드팩 폴더 구조째로
+    let parent = baseId, f = S.folders[baseId];
+    for (const n of names) { f = subfolders(parent).find((x) => x.name === n) || addFolder(n, parent); parent = f.id; }
+    return f;
+  }
   const found = findFolderPath(names); if (found) return found;
   let parent = null, f = null;
   for (const n of names) { f = subfolders(parent).find((x) => x.name === n) || addFolder(n, parent); parent = f.id; }
@@ -452,7 +468,18 @@ function ensureFolderPath(names) {
 }
 const CIRC_NO = '①②③④⑤⑥⑦⑧⑨⑩';
 const packAnswer = (a) => { const s = String(a ?? '').trim(); const k = CIRC_NO.indexOf(s[0]); return k >= 0 ? k + 1 : parseInt(s, 10) || 1; };
-export function previewPack(d) {
+// v2.3 넣을 곳: target = null(카드팩대로) | { id, keep } — keep=false면 고른 폴더에 단원만, true면 고른 폴더 안에 카드팩 폴더째로
+function targetFolder(names, target, create) {
+  if (target && target.id && S.folders[target.id]) {
+    if (!target.keep) return S.folders[target.id];
+    if (create) return ensureFolderPath(names, target.id);
+    let parent = target.id, f = S.folders[target.id];
+    for (const n of names) { f = subfolders(parent).find((x) => x.name === n); if (!f) return null; parent = f.id; }
+    return f;
+  }
+  return create ? ensureFolderPath(names) : findFolderPath(names);
+}
+export function previewPack(d, target = null) {
   const rows = (d.cards || []).map((c) => {
     const kind = c.kind === 'question' || c.kind === 'q' ? 'question' : c.kind === 'cloze' ? 'cloze' : 'basic';
     const r = {
@@ -468,17 +495,18 @@ export function previewPack(d) {
     return r;
   }).filter((c) => (c.kind === 'question' ? c.term && (c.answers ? c.wrong.length >= 1 : c.choices.length >= 2) : c.kind === 'cloze' ? /\{\{[\s\S]*?\}\}/.test(c.term) : c.term || c.def || c.imgs.length));
   return rows.map((c) => {
-    const f = findFolderPath(splitPath(c.folder));
+    const f = targetFolder(splitPath(c.folder), target, false);
     const s = f && setsOf(f.id).find((x) => x.name === c.set);
     const dup = s && cardsOf(s.id).some((x) => x.term === c.term && x.def === c.def);
-    return { ...c, folder: f ? folderPathLabel(f.id) : c.folder, newFolder: !f, newSet: !s, dup: !!dup };
+    const label = f ? folderPathLabel(f.id) : target && target.id ? [folderPathLabel(target.id), ...splitPath(c.folder)].join(' › ') : c.folder;
+    return { ...c, src: c.src || c.folder, folder: label, newFolder: !f, newSet: !s, dup: !!dup };
   });
 }
-export async function applyPack(rows) {
+export async function applyPack(rows, target = null) {
   let added = 0, skipped = 0;
   for (const c of rows) {
     if (c.dup || c.skip) { skipped++; continue; }
-    const f = ensureFolderPath(splitPath(c.folder));
+    const f = targetFolder(splitPath(c.src || c.folder), target, true);
     const s = setsOf(f.id).find((x) => x.name === c.set) || addSet(f.id, c.set);
     if (cardsOf(s.id).some((x) => x.term === c.term && x.def === c.def)) { skipped++; continue; }
     const card = newCard(s.id, c.term, c.def, undefined, c.kind !== 'basic' ? c : null); if (c.rating !== null && c.rating !== undefined) card.rating = c.rating;

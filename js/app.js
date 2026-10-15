@@ -180,6 +180,7 @@ function folderView(fid) {
       parent.order = f.order ?? 0;
       st.moveFolder(fid, parent.id); toast(`'${n}' 폴더 안으로 넣었어요`); go('#/f/' + parent.id);
     } },
+    { label: '여러 단원 한꺼번에 옮기기', run: () => moveManySets(fid) },
     { label: '위로 이동', run: () => { st.moveOrder('folder', fid, -1); toast('순서를 바꿨어요'); } },
     { label: '아래로 이동', run: () => { st.moveOrder('folder', fid, 1); toast('순서를 바꿨어요'); } },
     { label: '폴더 삭제', danger: true, run: async () => { if (await confirmBox(`'${f.name}' 폴더를 삭제할까요?`, `안의 하위 폴더, 단원, 카드 ${t.cards}장이 모두 삭제됩니다.`, '삭제', true)) { st.deleteFolder(fid); go(parentHref); } } },
@@ -245,6 +246,29 @@ function setView(sid, q = {}) {
     { label: '다른 폴더로 옮기기', run: () => moveSet(sid) },
     { label: '단원 삭제', danger: true, run: async () => { if (await confirmBox(`'${s.name}'을(를) 삭제할까요?`, `카드 ${all.length}장도 함께 삭제됩니다.`, '삭제', true)) { st.deleteSet(sid); go('#/f/' + f.id); } } },
   ]);
+}
+// v2.3: 이 폴더(하위 폴더 포함)의 단원 여러 개를 골라 한꺼번에 옮기기
+async function moveManySets(fid) {
+  const list = st.setsUnder(fid);
+  if (!list.length) return toast('옮길 단원이 없어요');
+  const label = (s) => { const p = st.folderPath(s.folderId).filter((f) => !st.folderPath(fid).slice(0, -1).some((x) => x.id === f.id)).map((f) => f.name); return p.join(' › '); };
+  const picked = await modal(`<h3>옮길 단원 고르기</h3>
+    <div class="row" style="margin-bottom:8px"><button class="btn sm ghost" data-all>전체 선택</button><button class="btn sm ghost" data-none>선택 해제</button><span class="spacer"></span><span class="small muted" data-n>0개</span></div>
+    <div class="list mv-list" style="gap:6px;max-height:55vh;overflow:auto">${list.map((s) => `<label class="mv-row"><input type="checkbox" value="${s.id}"><span><b>${esc(s.name)}</b><br><span class="small muted">${esc(label(s))} · 카드 ${st.cardsOf(s.id).length}장</span></span></label>`).join('')}</div>
+    <div class="row end" style="margin-top:12px"><button class="btn ghost" data-x>취소</button><button class="btn primary" data-ok>다음: 옮길 폴더 고르기</button></div>`, (m, close) => {
+    const boxes = $$('input[type=checkbox]', m); const n = $('[data-n]', m);
+    const upd = () => { n.textContent = `${boxes.filter((b) => b.checked).length}개`; };
+    boxes.forEach((b) => (b.onchange = upd));
+    $('[data-all]', m).onclick = () => { boxes.forEach((b) => (b.checked = true)); upd(); };
+    $('[data-none]', m).onclick = () => { boxes.forEach((b) => (b.checked = false)); upd(); };
+    $('[data-x]', m).onclick = () => close(null);
+    $('[data-ok]', m).onclick = () => { const ids = boxes.filter((b) => b.checked).map((b) => b.value); if (!ids.length) return toast('단원을 하나 이상 골라 주세요'); close(ids); };
+  });
+  if (!picked) return;
+  const to = await pickFolder(`단원 ${picked.length}개를 어느 폴더로 옮길까요?`, {});
+  if (!to) return;
+  const n = st.moveSets(picked, to);
+  toast(`${n}개 단원을 '${st.S.folders[to].name}'(으)로 옮겼어요`, 2500); route();
 }
 async function moveSet(sid) {
   const s = st.S.sets[sid];
@@ -553,29 +577,48 @@ export async function importFile(file) {
   let parsed;
   try { parsed = st.parseImport(await readFile(file)); } catch (e) { return toast(e.message, 3500); }
   if (parsed.kind === 'backup') return importBackupFlow(parsed.data);
-  // 카드팩
-  const rows = st.previewPack(parsed.data);
-  const add = rows.filter((r) => !r.dup).length, dup = rows.length - add;
-  const newSets = [...new Set(rows.filter((r) => r.newSet).map((r) => `${r.folder} › ${r.set}`))];
-  const kinds = { basic: 0, question: 0, cloze: 0 }; rows.forEach((r) => kinds[r.kind]++);
-  view().innerHTML = `
-  <div class="crumb"><a href="#/">홈</a> › <a href="#/import">가져오기</a></div>
-  <h1>카드팩 확인</h1>
-  <p class="muted">${esc(file.name)} · 카드 ${rows.length}장${parsed.data.title ? ` · ${esc(parsed.data.title)}` : ''}</p>
-  ${newSets.length ? `<div class="banner">새로 만들어질 단원: ${newSets.map(esc).join(', ')}</div>` : ''}
-  <p class="small muted">기본 카드는 표의 용어·정의 칸을 눌러 바로 고칠 수 있어요(확인문제·빈칸은 추가한 뒤 카드 편집에서). 회색 줄은 이미 같은 카드가 있어서 건너뜁니다.</p>
-  ${kinds.question || kinds.cloze ? `<p class="small">형식: ${Object.entries(kinds).filter(([, n]) => n).map(([k, n]) => `${KIND_LABEL[k]} ${n}장`).join(' · ')}</p>` : ''}
-  <div class="pv"><table><tr><th>폴더 › 단원</th><th>용어 · 문제 · 본문</th><th>정의 · 정답</th><th></th></tr>
-  ${rows.map((r, i) => `<tr class="${r.dup ? 'dup' : ''}" data-i="${i}"><td class="muted">${esc(r.folder)} › ${esc(r.set)}${r.kind !== 'basic' ? `<br><span class="kind-tag ${r.kind === 'question' ? 'q' : 'cz'}">${KIND_LABEL[r.kind]}</span>` : ''}</td>${r.kind === 'basic' ? `<td contenteditable data-k="term">${esc(r.term)}</td><td contenteditable data-k="def">${esc(r.def)}</td>` : `<td>${esc(plainA(r))}</td><td>${esc(plainB(r))}</td>`}
-    <td><label class="chk"><input type="checkbox" ${r.dup ? 'disabled' : 'checked'} data-use></label></td></tr>`).join('')}</table></div>
-  <div class="row end" style="margin-top:14px"><a class="btn ghost" href="#/import">취소</a><button class="btn primary" id="apply">${add}장 추가${dup ? ` (중복 ${dup}장 제외)` : ''}</button></div>`;
-  $$('.pv td[contenteditable]').forEach((td) => (td.oninput = () => { rows[+td.parentElement.dataset.i][td.dataset.k] = td.innerText.trim(); }));
-  $$('[data-use]').forEach((cb) => (cb.onchange = () => { rows[+cb.closest('tr').dataset.i].skip = !cb.checked; }));
-  $('#apply').onclick = async () => {
-    const r = await st.applyPack(rows);
-    toast(`${r.added}장 추가${r.skipped ? `, ${r.skipped}장 건너뜀` : ''}`, 3000);
-    go('#/');
+  // 카드팩 — v2.3: 넣을 폴더를 고를 수 있음
+  const T = { id: '', keep: false };
+  const edits = {}, skips = new Set();
+  const packFolders = [...new Set((parsed.data.cards || []).map((c) => String(c.folder || '미분류').split(/\s*[>›]\s*/).filter(Boolean).join(' › ')))];
+  let rows = [];
+  const draw = () => {
+    rows = st.previewPack(parsed.data, T.id ? { id: T.id, keep: T.keep } : null).map((r, i) => ({ ...r, ...(edits[i] || {}), skip: skips.has(i) }));
+    const add = rows.filter((r) => !r.dup).length, dup = rows.length - add;
+    const newSets = [...new Set(rows.filter((r) => r.newSet).map((r) => `${r.folder} › ${r.set}`))];
+    const kinds = { basic: 0, question: 0, cloze: 0 }; rows.forEach((r) => kinds[r.kind]++);
+    const tree = st.folderTree();
+    view().innerHTML = `
+    <div class="crumb"><a href="#/">홈</a> › <a href="#/import">가져오기</a></div>
+    <h1>카드팩 확인</h1>
+    <p class="muted">${esc(file.name)} · 카드 ${rows.length}장${parsed.data.title ? ` · ${esc(parsed.data.title)}` : ''}</p>
+    <div class="card" style="margin:12px 0">
+      <label class="f" style="margin-top:0">넣을 곳</label>
+      <select class="input" id="tgt">
+        <option value="">카드팩에 적힌 폴더 그대로 (${esc(packFolders.slice(0, 3).join(', '))}${packFolders.length > 3 ? ' …' : ''})</option>
+        ${tree.map(({ f, depth }) => `<option value="${f.id}" ${T.id === f.id ? 'selected' : ''}>${'　'.repeat(depth)}${depth ? '└ ' : ''}${esc(f.name)}</option>`).join('')}
+      </select>
+      ${T.id ? `<div class="seg" id="keep" style="margin-top:10px"><button data-v="0" class="${T.keep ? '' : 'on'}">이 폴더에 단원만 넣기</button><button data-v="1" class="${T.keep ? 'on' : ''}">이 폴더 안에 카드팩 폴더째로</button></div>
+        <p class="small muted" style="margin:8px 0 0">${T.keep ? `예: ${esc(st.folderPathLabel(T.id))} › ${esc(packFolders[0] || '')} › 단원` : `예: ${esc(st.folderPathLabel(T.id))} › 단원 (카드팩의 폴더 이름은 쓰지 않아요)`}</p>` : ''}
+    </div>
+    ${newSets.length ? `<div class="banner">새로 만들어질 단원 ${newSets.length}개: ${newSets.slice(0, 6).map(esc).join(', ')}${newSets.length > 6 ? ` 외 ${newSets.length - 6}개` : ''}</div>` : ''}
+    <p class="small muted">기본 카드는 표의 용어·정의 칸을 눌러 바로 고칠 수 있어요(확인문제·빈칸은 추가한 뒤 카드 편집에서). 회색 줄은 이미 같은 카드가 있어서 건너뜁니다.</p>
+    ${kinds.question || kinds.cloze ? `<p class="small">형식: ${Object.entries(kinds).filter(([, n]) => n).map(([k, n]) => `${KIND_LABEL[k]} ${n}장`).join(' · ')}</p>` : ''}
+    <div class="pv"><table><tr><th>폴더 › 단원</th><th>용어 · 문제 · 본문</th><th>정의 · 정답</th><th></th></tr>
+    ${rows.map((r, i) => `<tr class="${r.dup ? 'dup' : ''}" data-i="${i}"><td class="muted">${esc(r.folder)} › ${esc(r.set)}${r.kind !== 'basic' ? `<br><span class="kind-tag ${r.kind === 'question' ? 'q' : 'cz'}">${KIND_LABEL[r.kind]}</span>` : ''}</td>${r.kind === 'basic' ? `<td contenteditable data-k="term">${esc(r.term)}</td><td contenteditable data-k="def">${esc(r.def)}</td>` : `<td>${esc(plainA(r))}</td><td>${esc(plainB(r))}</td>`}
+      <td><label class="chk"><input type="checkbox" ${r.dup ? 'disabled' : r.skip ? '' : 'checked'} data-use></label></td></tr>`).join('')}</table></div>
+    <div class="row end" style="margin-top:14px"><a class="btn ghost" href="#/import">취소</a><button class="btn primary" id="apply">${add}장 추가${dup ? ` (중복 ${dup}장 제외)` : ''}</button></div>`;
+    $('#tgt').onchange = (e) => { T.id = e.target.value; draw(); };
+    $$('#keep button').forEach((b) => (b.onclick = () => { T.keep = b.dataset.v === '1'; draw(); }));
+    $$('.pv td[contenteditable]').forEach((td) => (td.oninput = () => { const i = +td.parentElement.dataset.i; (edits[i] = edits[i] || {})[td.dataset.k] = td.innerText.trim(); rows[i][td.dataset.k] = td.innerText.trim(); }));
+    $$('[data-use]').forEach((cb) => (cb.onchange = () => { const i = +cb.closest('tr').dataset.i; cb.checked ? skips.delete(i) : skips.add(i); rows[i].skip = !cb.checked; }));
+    $('#apply').onclick = async () => {
+      const r = await st.applyPack(rows, T.id ? { id: T.id, keep: T.keep } : null);
+      toast(`${r.added}장 추가${r.skipped ? `, ${r.skipped}장 건너뜀` : ''}`, 3000);
+      go('#/');
+    };
   };
+  draw();
 }
 
 async function importBackupFlow(d) {
@@ -607,10 +650,35 @@ function picker(q = {}) {
   else if (q.folder) st.setsUnder(q.folder).forEach((s) => P.sel.add(s.id));
   else if (q.all) allSets.forEach((s) => P.sel.add(s.id));
   else (last.sets || []).forEach((id) => allSets.some((s) => s.id === id) && P.sel.add(id));
-  const open = new Set();
-  for (const id of P.sel) st.folderPath(st.S.sets[id].folderId).forEach((f) => open.add(f.id));
-  if (q.folder) open.add(q.folder);
-  if (!open.size && fs[0]) open.add(fs[0].id);
+  // v2.3: 처음엔 접힌 상태(펼친 폴더는 기억). 보기: 교재별(폴더) / 단원별(같은 주제끼리)
+  const open = new Set((st.S.local.pickOpen || []).filter((id) => st.S.folders[id]));
+  if (q.folder) st.folderPath(q.folder).forEach((f) => open.add(f.id));
+  if (q.sets) for (const id of P.sel) st.folderPath(st.S.sets[id].folderId).forEach((f) => open.add(f.id));
+  P.view = st.S.local.pickView === 'topic' ? 'topic' : 'folder';
+  const saveOpen = () => { st.S.local.pickOpen = [...open]; st.save(); };
+  // 단원 이름에서 꼬리표·괄호를 떼어 같은 주제끼리 묶는 열쇠
+  const topicKey = (name) => String(name).replace(/\s*\((빈칸|확인문제|문제|blank|Blank)\)\s*$/, '').trim();
+  const topicGroups = (top) => {
+    const groups = new Map();
+    for (const s of st.setsUnder(top.id)) {
+      const k = topicKey(s.name);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(s);
+    }
+    return [...groups.entries()];
+  };
+  const subLabel = (s, top) => { const p = st.folderPath(s.folderId).filter((f) => f.id !== top.id).map((f) => f.name); return p.length ? p.join('›') : (s.name !== topicKey(s.name) ? s.name.slice(topicKey(s.name).length).replace(/[()\s]/g, '') : '단원'); };
+  const topicNode = (f) => {
+    const under = st.setsUnder(f.id); const k = under.filter((s) => P.sel.has(s.id)).length;
+    const gs = topicGroups(f);
+    return `<div class="fold"><div class="fh"><label class="chk"><input type="checkbox" data-f="${f.id}" ${k && k === under.length ? 'checked' : ''} ${under.length ? '' : 'disabled'}><span>${esc(f.name)}</span></label>
+      <span class="cnt pill ${k ? 'pr' : ''}">${k}/${under.length}</span><button class="icon-btn" data-open="${f.id}">${open.has(f.id) ? I.up : I.down}</button></div>
+      ${open.has(f.id) ? `<div class="topics">${gs.map(([name, ss]) => { const on = ss.filter((s) => P.sel.has(s.id)).length;
+        if (ss.length === 1 && st.S.sets[ss[0].id].folderId === f.id) { const s1 = ss[0]; return `<label class="chip ${P.sel.has(s1.id) ? 'on' : ''}"><input type="checkbox" data-s="${s1.id}" ${P.sel.has(s1.id) ? 'checked' : ''}>${esc(s1.name)}<span class="c">${st.cardsOf(s1.id).length}</span></label>`; }
+        return `<div class="topic ${on === ss.length ? 'on' : on ? 'part' : ''}"><button class="tp-name" data-g="${ss.map((s) => s.id).join(',')}">${esc(name)}</button>
+          <div class="tp-parts">${ss.map((s) => `<label class="chip sm ${P.sel.has(s.id) ? 'on' : ''}"><input type="checkbox" data-s="${s.id}" ${P.sel.has(s.id) ? 'checked' : ''}>${esc(subLabel(s, f))}<span class="c">${st.cardsOf(s.id).length}</span></label>`).join('')}</div></div>`; }).join('')
+        || '<span class="muted small">단원이 없어요</span>'}</div>` : ''}</div>`;
+  };
   const node = (f) => {
     const under = st.setsUnder(f.id); const k = under.filter((s) => P.sel.has(s.id)).length;
     const own = st.setsOf(f.id), subs = st.subfolders(f.id);
@@ -638,10 +706,14 @@ function picker(q = {}) {
     <div class="seg" id="msg" style="margin:10px 0 4px">
       ${[['flash', '낱말카드'], ['learn', '학습하기'], ['test', '테스트'], ['mc', '객관식'], ['match', '매칭'], ['review', '복습(Anki)']].map(([k, l]) => `<button data-v="${k}" class="${P.mode === k ? 'on' : ''}">${l}</button>`).join('')}</div>
     <p class="muted small">${{ flash: '카드를 넘기며 외워요. 오른쪽으로 밀면 "알고 있음", 왼쪽은 "학습 중". 사진은 모두 보여요.', learn: '틀린 카드는 조금 뒤에 다시 나와요. 전부 맞혀야 끝나요.', test: '문제를 보고 떠올린 뒤 정답을 확인하고 맞음/틀림을 직접 표시해요. 틀린 문제는 오답노트로 갑니다.', mc: '국시처럼 보기 5개 중 정답을 골라요. 보기는 같은 단원·폴더의 다른 카드 답으로 자동으로 만들어져요. 틀린 문제는 오답노트로 갑니다.', match: '용어와 정의 짝을 빠르게 맞히는 게임이에요. 확인문제·빈칸 카드는 빠져요.', review: 'Anki의 FSRS 알고리즘으로 잊어버릴 때쯤 다시 보여줘요. 매일 하면 가장 효율적이에요.' }[P.mode]}${['test', 'mc', 'learn', 'review'].includes(P.mode) ? ' 확인문제 카드는 정해진 보기 중에서 골라요.' : ''}${P.mode === 'mc' || (P.mode === 'learn' && P.answer === 'mc') ? ' 빈칸 카드는 빈칸 하나를 골라 다른 빈칸들의 답을 보기로 내요.' : ['test', 'review', 'learn'].includes(P.mode) ? ' 빈칸 카드는 빈칸을 눌러 하나씩 열어 보고 채점해요.' : ''}${['test', 'mc', 'learn', 'review', 'match'].includes(P.mode) ? ' 사진이 여러 장인 카드는 한 장만 무작위로 나와요.' : ''}</p>
-    <div class="row" style="margin-top:18px"><h2 style="margin:0">범위</h2><span class="spacer"></span>
+    <div class="row" style="margin-top:18px;flex-wrap:wrap"><h2 style="margin:0">범위</h2>
+      <div class="seg sm" id="vsg">${[['folder', '교재별'], ['topic', '단원별']].map(([k, l]) => `<button data-v="${k}" class="${P.view === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <span class="spacer"></span>
+      <button class="btn sm ghost" id="foldAll">${open.size ? '모두 접기' : '모두 펼치기'}</button>
       <button class="btn sm ghost" id="selAll">전체 선택</button><button class="btn sm ghost" id="selNone">선택 해제</button></div>
+    <p class="small muted" style="margin:6px 0 0">${P.view === 'topic' ? '같은 주제의 단원(예: Blank와 문제)을 한 줄로 묶어 보여줘요. 주제 이름을 누르면 묶음 전체가 선택돼요.' : '폴더(교재)별로 보여줘요. ▾를 눌러 펼치세요.'}</p>
     <div class="tree" style="margin-top:10px">
-      ${fs.map(node).join('') || '<div class="empty">먼저 폴더와 카드를 만들어 주세요.</div>'}
+      ${fs.map(P.view === 'topic' ? topicNode : node).join('') || '<div class="empty">먼저 폴더와 카드를 만들어 주세요.</div>'}
     </div>
     <h2>옵션</h2>
     <div class="card">
@@ -666,9 +738,12 @@ function picker(q = {}) {
     $$('[data-f]').forEach((cb) => {
       const ss = st.setsUnder(cb.dataset.f); const k = ss.filter((s) => P.sel.has(s.id)).length;
       cb.indeterminate = k > 0 && k < ss.length;
-      cb.onchange = () => { ss.forEach((s) => (cb.checked ? P.sel.add(s.id) : P.sel.delete(s.id))); open.add(cb.dataset.f); draw(); };
+      cb.onchange = () => { ss.forEach((s) => (cb.checked ? P.sel.add(s.id) : P.sel.delete(s.id))); draw(); };
     });
-    $$('[data-open]').forEach((b) => (b.onclick = () => { const id = b.dataset.open; open.has(id) ? open.delete(id) : open.add(id); draw(); }));
+    $$('[data-open]').forEach((b) => (b.onclick = () => { const id = b.dataset.open; open.has(id) ? open.delete(id) : open.add(id); saveOpen(); draw(); }));
+    $$('#vsg button').forEach((b) => (b.onclick = () => { P.view = b.dataset.v; st.S.local.pickView = P.view; st.save(); draw(); }));
+    $('#foldAll').onclick = () => { if (open.size) open.clear(); else st.folderTree().forEach(({ f }) => open.add(f.id)); saveOpen(); draw(); };
+    $$('[data-g]').forEach((b) => (b.onclick = () => { const ids = b.dataset.g.split(','); const all = ids.every((id) => P.sel.has(id)); ids.forEach((id) => (all ? P.sel.delete(id) : P.sel.add(id))); draw(); }));
     $$('[data-s]').forEach((cb) => (cb.onchange = () => { cb.checked ? P.sel.add(cb.dataset.s) : P.sel.delete(cb.dataset.s); draw(); }));
     const sh = $('#shuf'); if (sh) sh.onchange = () => { P.shuffle = sh.checked; };
     $$('#dsg button').forEach((b) => (b.onclick = () => { P.dir = b.dataset.v; draw(); }));
@@ -790,7 +865,7 @@ async function settingsView() {
   </div>
   <h2>위험 구역</h2>
   <div class="card"><button class="btn ng" id="reset">이 기기의 모든 데이터 삭제</button></div>
-  <p class="muted small" style="margin-top:24px">한의 암기노트 v2.2 · 복습 일정은 Anki의 FSRS 알고리즘(ts-fsrs, MIT)을 사용합니다.</p>`;
+  <p class="muted small" style="margin-top:24px">한의 암기노트 v2.3 · 복습 일정은 Anki의 FSRS 알고리즘(ts-fsrs, MIT)을 사용합니다.</p>`;
 
   const fname = (ext) => { const d = new Date(); const z = (n) => String(n).padStart(2, '0'); return `암기노트-백업-${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}.${ext}`; };
   $('#exp').onclick = async () => { toast('백업 파일 만드는 중…'); download(fname('json'), JSON.stringify(await st.exportBackup(), null, 1)); st.markExported(); toast('백업 파일을 저장했어요 (다운로드 폴더)'); setTimeout(settingsView, 600); };

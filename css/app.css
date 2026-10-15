@@ -459,3 +459,15 @@ hr.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }
 .rot-cols { gap: 14px; }
 @media (max-width: 640px) { .rot-cols { grid-template-columns: 1fr; } }
 .ed-q .cap.warn { color: var(--ng); }
+
+/* ---------- v2.3: 학습 범위 단원별 보기 · 여러 단원 옮기기 ---------- */
+.tree .topics { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 12px 12px 12px; align-items: stretch; }
+.topic { display: inline-flex; align-items: center; gap: 6px; border: 2px solid var(--line); border-radius: 14px; padding: 4px 6px 4px 4px; background: var(--surface); }
+.topic.on { border-color: var(--primary); }
+.topic.part { border-color: var(--primary-soft); }
+.topic .tp-name { border: 0; background: transparent; font-weight: 800; color: var(--text); padding: 6px 8px; border-radius: 10px; cursor: pointer; font-size: 14px; }
+.topic.on .tp-name { color: var(--primary); }
+.topic .tp-parts { display: flex; gap: 4px; flex-wrap: wrap; }
+.chip.sm { padding: 4px 10px; font-size: 13px; min-height: 30px; }
+.mv-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); cursor: pointer; }
+.mv-row input { width: 20px; height: 20px; margin-top: 2px; accent-color: var(--primary); flex: none; }
