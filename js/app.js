@@ -2,7 +2,9 @@ import * as st from './store.js';
 import * as study from './study.js';
 import { $, $$, esc, I, toast, ask, confirmBox, modal, menu, fmtDate, autoGrow, download, readFile, starsHTML, pickRating } from './ui.js';
 import { photoBlock, hydrate, fileToStoredImage, openViewer } from './media.js';
-import { kindOf, listHTML, clozeAnswers, qChoices, qAnswer, circ, plainA, plainB, KIND_LABEL, isRot, rotAnswers } from './kinds.js';
+import { unzip, extOf, isImageName, baseName } from './zip.js';
+import { initTables } from './table.js';
+import { kindOf, listHTML, clozeAnswers, qChoices, qAnswer, circ, plainA, plainB, rich, clozeHTML, KIND_LABEL, isRot, rotAnswers } from './kinds.js';
 
 const view = () => $('#view');
 const go = (h) => { if (location.hash === h) route(); else location.hash = h; };
@@ -345,8 +347,8 @@ function editor(sid, q = {}) {
         <div class="cap">보기 · 왼쪽 동그라미로 정답 선택</div></div>
       <div><textarea rows="1" data-k="def" placeholder="해설 (근거·감별 증상, 선택)">${esc(r.def)}</textarea><div class="cap">해설</div></div></div>`;
     if (r.kind === 'cloze') return `<div class="ed-cz">
-      <div class="row" style="gap:6px;margin-bottom:6px"><button class="btn sm" data-wrap>［ ］ 빈칸으로</button><button class="btn sm ghost" data-unwrap>빈칸 풀기</button><span class="small muted">본문에서 글자를 고른 뒤 누르세요 · 직접 {{정답}}으로 써도 돼요</span></div>
-      <div><textarea rows="3" data-k="term" placeholder="본문 (예: 미숙아는 만삭아보다 {{호흡이 빠르고}} 변화폭도 큼)">${esc(r.term)}</textarea><div class="cap" data-czinfo>${clozeInfo(r)}</div></div>
+      <div class="row" style="gap:6px;margin-bottom:6px"><button class="btn sm" data-wrap>［ ］ 빈칸으로</button><button class="btn sm ghost" data-unwrap>빈칸 풀기</button><button class="btn sm ghost" data-tbl>▦ 표 넣기</button><button class="btn sm ghost" data-prev>미리보기</button><span class="small muted">본문에서 글자를 고른 뒤 누르세요 · 직접 {{정답}}으로 써도 돼요</span></div>
+      <div><textarea rows="3" data-k="term" placeholder="본문 (예: 미숙아는 만삭아보다 {{호흡이 빠르고}} 변화폭도 큼)">${esc(r.term)}</textarea><div class="cap" data-czinfo>${clozeInfo(r)}</div><div class="ed-prev" hidden></div></div>
       <div><textarea rows="1" data-k="def" placeholder="메모 (출처·쪽수 등, 선택)">${esc(r.def)}</textarea><div class="cap">메모</div></div></div>`;
     return `<div class="ed-body"><div><textarea rows="1" data-k="term" placeholder="용어 (A)">${esc(r.term)}</textarea><div class="cap">용어</div></div>
     <div><textarea rows="1" data-k="def" placeholder="정의 (B)">${esc(r.def)}</textarea><div class="cap">정의</div></div></div>`;
@@ -415,7 +417,7 @@ function editor(sid, q = {}) {
       autoGrow(ta);
       ta.oninput = () => {
         r[ta.dataset.k] = ta.value; autoGrow(ta); touch();
-        if (r.kind === 'cloze' && ta.dataset.k === 'term') { const ci = $('[data-czinfo]', el); if (ci) ci.innerHTML = clozeInfo(r); }
+        if (r.kind === 'cloze' && ta.dataset.k === 'term') { const ci = $('[data-czinfo]', el); if (ci) ci.innerHTML = clozeInfo(r); const pv = $('.ed-prev', el); if (pv && !pv.hidden) pv.innerHTML = clozeHTML(r.term, { all: true }); }
       };
       ta.onkeydown = (e) => {
         if (e.key === 'Tab' && !e.shiftKey && ta.dataset.k === 'def' && el === $$('.ed-row').at(-1)) { e.preventDefault(); addRow(); }
@@ -425,7 +427,18 @@ function editor(sid, q = {}) {
     $$('input[type=radio]', el).forEach((rb) => (rb.onchange = () => { r.answer = +rb.value; $$('.qc', el).forEach((x, k) => x.classList.toggle('on', k + 1 === r.answer)); touch(); }));
     const ta = $('textarea[data-k="term"]', el);
     const wb = $('[data-wrap]', el), ub = $('[data-unwrap]', el);
-    [[wb, false], [ub, true]].forEach(([btn, un]) => { if (!btn) return; btn.onpointerdown = (e) => e.preventDefault(); btn.onclick = () => { wrapSel(ta, r, un); const ci = $('[data-czinfo]', el); if (ci) ci.innerHTML = clozeInfo(r); }; });
+    [[wb, false], [ub, true]].forEach(([btn, un]) => { if (!btn) return; btn.onpointerdown = (e) => e.preventDefault(); btn.onclick = () => { wrapSel(ta, r, un); const ci = $('[data-czinfo]', el); if (ci) ci.innerHTML = clozeInfo(r); const pv = $('.ed-prev', el); if (pv && !pv.hidden) pv.innerHTML = clozeHTML(r.term, { all: true }); }; });
+    // v2.4 표: 커서 자리에 빈 표 넣기 / 본문을 표·빈칸 모양 그대로 미리보기
+    const pv = $('.ed-prev', el), pb = $('[data-prev]', el), tb = $('[data-tbl]', el);
+    const drawPrev = () => { if (pv && !pv.hidden) pv.innerHTML = clozeHTML(r.term, { all: true }); };
+    if (pb) pb.onclick = () => { pv.hidden = !pv.hidden; pb.classList.toggle('on', !pv.hidden); drawPrev(); };
+    if (tb) { tb.onpointerdown = (e) => e.preventDefault(); tb.onclick = () => {
+      const a = ta.selectionStart, v = ta.value;
+      const pre = a > 0 && v[a - 1] !== '\n' ? '\n' : '', post = a < v.length && v[a] !== '\n' ? '\n' : '';
+      const t = '| 구분 | 내용 | 처방 |\n|---|---|---|\n| 항목 | {{빈칸}} | |\n| 항목 | | |';
+      ta.value = v.slice(0, a) + pre + t + post + v.slice(a); ta.setSelectionRange(a + pre.length, a + pre.length + t.length);
+      r.term = ta.value; autoGrow(ta); touch(); const ci = $('[data-czinfo]', el); if (ci) ci.innerHTML = clozeInfo(r); drawPrev();
+    }; }
     $$('[data-rot]', el).forEach((b) => (b.onclick = () => {
       const to = b.dataset.rot === '1'; if (r.rot === to) return;
       if (to && !r.ansText.trim()) { // 고정 보기 → 돌려쓰기: 정답은 정답 후보로, 나머지 보기는 오답 풀로
@@ -512,8 +525,8 @@ function importView(q = {}) {
     <p class="muted">엑셀·구글 시트에서 <b>두 열(A: 용어, B: 정의)</b>을 복사해 붙여넣거나, Claude가 만들어 준 <b>카드팩 파일</b>을 불러오세요.</p>
     <div class="card" style="margin-top:12px">
       <div class="row"><h3>📄 카드팩 / 백업 파일 불러오기</h3><span class="spacer"></span><button class="btn primary" id="pickFile">파일 선택</button>
-      <input type="file" id="file" hidden></div>
-      <p class="muted small" style="margin:6px 0 0">카드팩에는 폴더·단원 이름이 들어 있어서 알맞은 곳에 자동으로 들어갑니다.</p>
+      <input type="file" id="file" multiple hidden></div>
+      <p class="muted small" style="margin:6px 0 0">카드팩에는 폴더·단원 이름이 들어 있어서 알맞은 곳에 자동으로 들어갑니다. 사진이 있는 카드팩은 <b>zip 파일</b>을 고르거나, 카드팩(.json)과 사진 파일을 <b>함께 골라</b> 주세요.</p>
     </div>
     <h2>붙여넣기</h2>
     <div class="card">
@@ -568,14 +581,36 @@ function importView(q = {}) {
     const ct = $('#cts'); if (ct) ct.oninput = () => { P.cts = ct.value || '-'; P.ts = P.cts; preview(); };
     const cc = $('#ccs'); if (cc) cc.oninput = () => { P.ccs = cc.value || ';;'; P.cs = P.ccs; preview(); };
     $('#pickFile').onclick = () => $('#file').click();
-    $('#file').onchange = (e) => { const file = e.target.files[0]; e.target.value = ''; if (file) importFile(file); };
+    $('#file').onchange = (e) => { const fl = [...e.target.files]; e.target.value = ''; if (fl.length) importFile(fl); };
   };
   draw();
 }
 
-export async function importFile(file) {
-  let parsed;
-  try { parsed = st.parseImport(await readFile(file)); } catch (e) { return toast(e.message, 3500); }
+const thumbCache = new WeakMap();
+const thumbURL = (o) => { if (o.data) return o.data; if (!thumbCache.has(o.blob)) thumbCache.set(o.blob, URL.createObjectURL(o.blob)); return thumbCache.get(o.blob); };
+// v2.4: 파일 하나(.json·.txt·.zip) 또는 여러 개(카드팩 .json + 사진 파일)를 받는다
+export async function importFile(input) {
+  const list = Array.isArray(input) ? input : input && typeof input.length === 'number' && !(input instanceof Blob) ? [...input] : [input];
+  let parsed, file;
+  try {
+    const entries = [];
+    for (const f of list) {
+      if (extOf(f.name) === 'zip') entries.push(...(await unzip(f)).map((x) => ({ ...x, zip: f.name })));
+      else entries.push({ name: f.name, blob: f });
+    }
+    const imgs = entries.filter((x) => isImageName(x.name));
+    const texts = entries.filter((x) => !isImageName(x.name));
+    if (!texts.length) throw new Error(imgs.length ? '카드팩(.json) 파일도 함께 골라 주세요.' : '읽을 파일이 없어요.');
+    const main = texts.find((x) => extOf(x.name) === 'json') || texts[0];
+    if (texts.length > 1) toast(`카드팩은 한 번에 하나씩 불러와요: ${baseName(main.name)}`, 3000);
+    parsed = st.parseImport(await main.blob.text());
+    const zipName = list.length === 1 && extOf(list[0].name) === 'zip' ? list[0].name : '';
+    file = { name: zipName || (imgs.length ? `${baseName(main.name)} + 사진 ${imgs.length}장` : baseName(main.name)) };
+    if (parsed.kind === 'pack') {
+      const m = new Map(); for (const x of imgs) { const k = baseName(x.name).toLowerCase(); if (!m.has(k)) m.set(k, x.blob); }
+      parsed.data._files = m;
+    }
+  } catch (e) { return toast(e.message, 3500); }
   if (parsed.kind === 'backup') return importBackupFlow(parsed.data);
   // 카드팩 — v2.3: 넣을 폴더를 고를 수 있음
   const T = { id: '', keep: false };
@@ -587,6 +622,7 @@ export async function importFile(file) {
     const add = rows.filter((r) => !r.dup).length, dup = rows.length - add;
     const newSets = [...new Set(rows.filter((r) => r.newSet).map((r) => `${r.folder} › ${r.set}`))];
     const kinds = { basic: 0, question: 0, cloze: 0 }; rows.forEach((r) => kinds[r.kind]++);
+    const nImg = rows.reduce((a, r) => a + (r.imgs || []).length, 0), miss = [...new Set(rows.flatMap((r) => r.imgMiss || []))];
     const tree = st.folderTree();
     view().innerHTML = `
     <div class="crumb"><a href="#/">홈</a> › <a href="#/import">가져오기</a></div>
@@ -603,16 +639,19 @@ export async function importFile(file) {
     </div>
     ${newSets.length ? `<div class="banner">새로 만들어질 단원 ${newSets.length}개: ${newSets.slice(0, 6).map(esc).join(', ')}${newSets.length > 6 ? ` 외 ${newSets.length - 6}개` : ''}</div>` : ''}
     <p class="small muted">기본 카드는 표의 용어·정의 칸을 눌러 바로 고칠 수 있어요(확인문제·빈칸은 추가한 뒤 카드 편집에서). 회색 줄은 이미 같은 카드가 있어서 건너뜁니다.</p>
+    ${nImg ? `<p class="small">📷 사진 ${nImg}장이 함께 들어갑니다 (긴 변 1600px로 줄여서 저장).</p>` : ''}
+    ${miss.length ? `<div class="banner warn">사진 파일 ${miss.length}개를 찾지 못했어요: ${miss.slice(0, 5).map(esc).join(', ')}${miss.length > 5 ? ' …' : ''}<br><span class="small">카드팩과 사진을 zip 하나로 묶거나, 파일을 고를 때 사진도 함께 골라 주세요. 그대로 추가하면 사진 없이 들어갑니다.</span></div>` : ''}
     ${kinds.question || kinds.cloze ? `<p class="small">형식: ${Object.entries(kinds).filter(([, n]) => n).map(([k, n]) => `${KIND_LABEL[k]} ${n}장`).join(' · ')}</p>` : ''}
     <div class="pv"><table><tr><th>폴더 › 단원</th><th>용어 · 문제 · 본문</th><th>정의 · 정답</th><th></th></tr>
-    ${rows.map((r, i) => `<tr class="${r.dup ? 'dup' : ''}" data-i="${i}"><td class="muted">${esc(r.folder)} › ${esc(r.set)}${r.kind !== 'basic' ? `<br><span class="kind-tag ${r.kind === 'question' ? 'q' : 'cz'}">${KIND_LABEL[r.kind]}</span>` : ''}</td>${r.kind === 'basic' ? `<td contenteditable data-k="term">${esc(r.term)}</td><td contenteditable data-k="def">${esc(r.def)}</td>` : `<td>${esc(plainA(r))}</td><td>${esc(plainB(r))}</td>`}
+    ${rows.map((r, i) => `<tr class="${r.dup ? 'dup' : ''}" data-i="${i}"><td class="muted">${esc(r.folder)} › ${esc(r.set)}${r.kind !== 'basic' ? `<br><span class="kind-tag ${r.kind === 'question' ? 'q' : 'cz'}">${KIND_LABEL[r.kind]}</span>` : ''}${(r.imgs || []).length ? `<div class="pv-ph">${r.imgs.slice(0, 3).map((o) => `<img src="${esc(thumbURL(o))}" alt="">`).join('')}${r.imgs.length > 3 ? `<span>+${r.imgs.length - 3}</span>` : ''}</div>` : ''}${(r.imgMiss || []).length ? `<div class="small" style="color:var(--ng)">사진 없음: ${esc(r.imgMiss.join(', '))}</div>` : ''}</td>${r.kind === 'basic' ? `<td contenteditable data-k="term">${esc(r.term)}</td><td contenteditable data-k="def">${esc(r.def)}</td>` : `<td>${rich(plainA(r))}</td><td>${rich(plainB(r))}</td>`}
       <td><label class="chk"><input type="checkbox" ${r.dup ? 'disabled' : r.skip ? '' : 'checked'} data-use></label></td></tr>`).join('')}</table></div>
     <div class="row end" style="margin-top:14px"><a class="btn ghost" href="#/import">취소</a><button class="btn primary" id="apply">${add}장 추가${dup ? ` (중복 ${dup}장 제외)` : ''}</button></div>`;
     $('#tgt').onchange = (e) => { T.id = e.target.value; draw(); };
     $$('#keep button').forEach((b) => (b.onclick = () => { T.keep = b.dataset.v === '1'; draw(); }));
     $$('.pv td[contenteditable]').forEach((td) => (td.oninput = () => { const i = +td.parentElement.dataset.i; (edits[i] = edits[i] || {})[td.dataset.k] = td.innerText.trim(); rows[i][td.dataset.k] = td.innerText.trim(); }));
     $$('[data-use]').forEach((cb) => (cb.onchange = () => { const i = +cb.closest('tr').dataset.i; cb.checked ? skips.delete(i) : skips.add(i); rows[i].skip = !cb.checked; }));
-    $('#apply').onclick = async () => {
+    $('#apply').onclick = async (e) => {
+      const btn = e.currentTarget; if (btn.disabled) return; btn.disabled = true; btn.textContent = nImg ? '사진 저장하는 중…' : '추가하는 중…';
       const r = await st.applyPack(rows, T.id ? { id: T.id, keep: T.keep } : null);
       toast(`${r.added}장 추가${r.skipped ? `, ${r.skipped}장 건너뜀` : ''}`, 3000);
       go('#/');
@@ -839,7 +878,7 @@ async function settingsView() {
       <button class="btn primary" id="exp">💾 백업 파일 저장</button>
       ${canShare ? '<button class="btn" id="share">📤 공유하기 (카톡·드라이브)</button>' : ''}
       <button class="btn" id="imp">📂 백업·카드팩 불러오기</button>
-      <input type="file" id="file" hidden>
+      <input type="file" id="file" multiple hidden>
     </div>
     <details style="margin-top:14px"><summary class="small" style="cursor:pointer;font-weight:700">옮기는 방법</summary>
       <ol class="small muted" style="padding-left:20px">
@@ -865,7 +904,7 @@ async function settingsView() {
   </div>
   <h2>위험 구역</h2>
   <div class="card"><button class="btn ng" id="reset">이 기기의 모든 데이터 삭제</button></div>
-  <p class="muted small" style="margin-top:24px">한의 암기노트 v2.3 · 복습 일정은 Anki의 FSRS 알고리즘(ts-fsrs, MIT)을 사용합니다.</p>`;
+  <p class="muted small" style="margin-top:24px">한의 암기노트 v2.4 · 복습 일정은 Anki의 FSRS 알고리즘(ts-fsrs, MIT)을 사용합니다.</p>`;
 
   const fname = (ext) => { const d = new Date(); const z = (n) => String(n).padStart(2, '0'); return `암기노트-백업-${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}.${ext}`; };
   $('#exp').onclick = async () => { toast('백업 파일 만드는 중…'); download(fname('json'), JSON.stringify(await st.exportBackup(), null, 1)); st.markExported(); toast('백업 파일을 저장했어요 (다운로드 폴더)'); setTimeout(settingsView, 600); };
@@ -876,7 +915,7 @@ async function settingsView() {
     catch (e) { if (e.name !== 'AbortError') toast('공유에 실패했어요. 「백업 파일 저장」을 사용해 주세요.'); }
   };
   $('#imp').onclick = () => $('#file').click();
-  $('#file').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importFile(f); };
+  $('#file').onchange = (e) => { const fl = [...e.target.files]; e.target.value = ''; if (fl.length) importFile(fl); };
   $('#exam').onchange = (e) => { st.setSettings({ examDate: e.target.value }); toast('저장했어요'); };
   $('#npd').onchange = (e) => { st.setSettings({ newPerDay: Math.max(0, +e.target.value || 0) }); toast('저장했어요'); };
   $('#qsh').onchange = (e) => { st.setSettings({ qShuffle: e.target.checked }); toast('저장했어요'); };
@@ -896,6 +935,7 @@ function applyTheme() {
 
 // ================================================================ 시작
 (async function init() {
+  initTables();
   await st.load();
   applyTheme();
   document.addEventListener('visibilitychange', () => { if (document.hidden && leaveHook) leaveHook(); });

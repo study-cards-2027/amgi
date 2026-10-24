@@ -3,25 +3,7 @@ import * as st from './store.js';
 import { $, $$, esc } from './ui.js';
 
 // ---------- 첨부: 크게 찍은 사진을 화면용 크기로 줄여 저장 ----------
-const MAX_SIDE = 1600;
-export async function fileToStoredImage(file) {
-  let src, w, h, close = () => {};
-  try {
-    const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
-    src = bmp; w = bmp.width; h = bmp.height; close = () => bmp.close && bmp.close();
-  } catch (_) {
-    const url = URL.createObjectURL(file);
-    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
-    src = img; w = img.naturalWidth; h = img.naturalHeight; close = () => URL.revokeObjectURL(url);
-  }
-  const k = Math.min(1, MAX_SIDE / Math.max(w, h));
-  const cw = Math.round(w * k), ch = Math.round(h * k);
-  const cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
-  const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, cw, ch); g.drawImage(src, 0, 0, cw, ch);
-  close();
-  const blob = await new Promise((res) => cv.toBlob(res, 'image/jpeg', 0.86));
-  return st.putImage(blob || file);
-}
+export async function fileToStoredImage(file) { return st.putImage(await st.shrinkImage(file)); }
 
 // ---------- 배치 ----------
 // 1장: 크게 / 2~4장: 격자 / 5장 이상: 옆으로 넘기는 띠 + "n/N"

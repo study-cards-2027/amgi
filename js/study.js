@@ -2,7 +2,7 @@
 import * as st from './store.js';
 import { $, $$, esc, I, shuffle, toast, confirmBox, fmtDur, starsHTML, pickRating } from './ui.js';
 import { photoBlock, hydrate, pickOne } from './media.js';
-import { kindOf, clozeHTML, clozeAnswers, clozeCount, clozePlain, fixedChoices, qAnswerText, listHTML, circ, isRot, rotAnswers, pickTarget, rotChoices, groupKey } from './kinds.js';
+import { kindOf, clozeHTML, clozeAnswers, clozeCount, clozePlain, fixedChoices, qAnswerText, listHTML, circ, rich, hasTable, isRot, rotAnswers, pickTarget, rotChoices, groupKey } from './kinds.js';
 
 export let session = null;
 const view = () => $('#view');
@@ -25,10 +25,10 @@ function faceOf(c, dir, photo = 'one') {
 }
 // 문제 칸 HTML (빈칸은 cz 옵션: open/all/target/tap)
 function promptHTML(f, cz = {}, extra = '') {
-  const body = f.kind === 'cloze' ? clozeHTML(f.q, cz) : esc(f.q);
+  const body = f.kind === 'cloze' ? clozeHTML(f.q, cz) : rich(f.q);
   return `<div class="q ${f.kind !== 'basic' ? 'q-' + f.kind : ''}" id="q"><div class="lab">${f.ql}${extra}</div>${photoBlock(f.qi)}<div class="txt">${body}</div></div>`;
 }
-const exHTML = (f) => (f.ex ? `<div class="ans ex"><div class="lab">${f.exl}</div><div class="txt">${esc(f.ex)}</div></div>` : '');
+const exHTML = (f) => (f.ex ? `<div class="ans ex"><div class="lab">${f.exl}</div><div class="txt">${rich(f.ex)}</div></div>` : '');
 // 직접 채점 영역: 정답 보기 전/후
 function selfHTML(f, s) {
   if (f.kind === 'cloze') {
@@ -38,7 +38,7 @@ function selfHTML(f, s) {
       <div style="margin-top:10px"><button class="btn primary block" style="min-height:60px;font-size:18px" data-reveal>${opened ? '나머지 모두 보기' : '모두 보기'}</button></div>`}`;
   }
   return `${promptHTML(f)}
-    ${s.revealed ? `<div class="ans"><div class="lab">정답 · ${f.al}</div>${photoBlock(f.ai)}<div class="txt">${esc(f.a)}</div></div>`
+    ${s.revealed ? `<div class="ans"><div class="lab">정답 · ${f.al}</div>${photoBlock(f.ai)}<div class="txt">${rich(f.a)}</div></div>`
       : `<div style="margin-top:18px"><button class="btn primary block" style="min-height:60px;font-size:18px" data-reveal>정답 보기</button></div>`}`;
 }
 function bindSelf(f, s, rerender) {
@@ -103,7 +103,7 @@ async function askRate(cid, after) {
   st.setRating('card', cid, v); after && after();
 }
 function bindRate(after) { $$('[data-rate]').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); askRate(b.dataset.rate, after); })); }
-const isLong = (s) => (s || '').length > 90 || (s || '').split('\n').length > 3;
+const isLong = (s) => (s || '').length > 90 || (s || '').split('\n').length > 3 || hasTable(s);
 
 // ---------------------------------------------------------------- 시작
 export function start(mode, cards, opts = {}) {
@@ -159,18 +159,18 @@ function renderFlash() {
   if (!c || c.del) { s.i++; return renderFlash(); }
   const f = s.faces[c.id] || (s.faces[c.id] = faceOf(c, s.opts.dir || 'term', 'all'));
   const pct = (s.i / s.order.length) * 100;
-  const face = (cls, lab, txt, imgs, html = null) => `<div class="face ${cls} ${html !== null || isLong(txt) ? 'long' : ''} ${imgs.length ? 'has-ph' : ''}"><span class="lab">${lab}</span>${photoBlock(imgs)}<div class="txt">${html !== null ? html : esc(txt)}</div></div>`;
+  const face = (cls, lab, txt, imgs, html = null) => `<div class="face ${cls} ${html !== null || isLong(txt) ? 'long' : ''} ${imgs.length ? 'has-ph' : ''}"><span class="lab">${lab}</span>${photoBlock(imgs)}<div class="txt">${html !== null ? html : rich(txt)}</div></div>`;
   let frontH = null, backH = null;
   if (f.kind === 'question' && isRot(c)) {
-    frontH = `<div>${esc(f.q)}<div class="q-list">정답 ${rotAnswers(c).length}개를 떠올려 보세요</div></div>`;
-    backH = `<div><b>${esc(rotAnswers(c).join(' · '))}</b>${f.ex ? `<div class="ex-txt">${esc(f.ex)}</div>` : ''}</div>`;
+    frontH = `<div>${rich(f.q)}<div class="q-list">정답 ${rotAnswers(c).length}개를 떠올려 보세요</div></div>`;
+    backH = `<div><b>${esc(rotAnswers(c).join(' · '))}</b>${f.ex ? `<div class="ex-txt">${rich(f.ex)}</div>` : ''}</div>`;
   } else if (f.kind === 'question') {
-    const ch = fixedChoices(c).map((o) => `${circ(o.no)} ${esc(o.t)}`).join('\n');
-    frontH = `<div>${esc(f.q)}<div class="q-list">${ch}</div></div>`;
-    backH = `<div><b>${esc(f.a)}</b>${f.ex ? `<div class="ex-txt">${esc(f.ex)}</div>` : ''}</div>`;
+    const ch = fixedChoices(c).map((o) => `${circ(o.no)} ${rich(o.t)}`).join('\n');
+    frontH = `<div>${rich(f.q)}<div class="q-list">${ch}</div></div>`;
+    backH = `<div><b>${rich(f.a)}</b>${f.ex ? `<div class="ex-txt">${rich(f.ex)}</div>` : ''}</div>`;
   } else if (f.kind === 'cloze') {
     frontH = clozeHTML(f.q, {});
-    backH = `<div>${clozeHTML(f.q, { all: true })}${f.ex ? `<div class="ex-txt">${esc(f.ex)}</div>` : ''}</div>`;
+    backH = `<div>${clozeHTML(f.q, { all: true })}${f.ex ? `<div class="ex-txt">${rich(f.ex)}</div>` : ''}</div>`;
   }
   view().innerHTML = `${topbar(`${s.i + 1} / ${s.order.length}`, s.title)}
   <div class="progress"><i style="width:${pct}%"></i></div>
@@ -513,7 +513,7 @@ function renderReview() {
   <div class="qa">
     ${isNew ? '<div class="row small" style="margin-bottom:8px"><span class="pill pr">새 카드</span></div>' : ''}
     ${mc ? mcHTML(f, mc, s.picked) : f.kind === 'cloze' ? selfHTML(f, s) : promptHTML(f)}
-    ${s.revealed ? `${!mc && f.kind === 'basic' ? `<div class="ans"><div class="lab">${f.al}</div>${photoBlock(f.ai)}<div class="txt">${esc(f.a)}</div></div>` : ''}
+    ${s.revealed ? `${!mc && f.kind === 'basic' ? `<div class="ans"><div class="lab">${f.al}</div>${photoBlock(f.ai)}<div class="txt">${rich(f.a)}</div></div>` : ''}
     <div class="grade4">
       <button class="btn again ${mc && !mc.ch[s.picked]?.ok ? 'sugg' : ''}" data-g="1">다시<small>${lab(1)}</small></button>
       <button class="btn hard" data-g="2">어려움<small>${lab(2)}</small></button>
@@ -614,7 +614,7 @@ function mcHTML(f, mc, picked) {
   return `${prompt}
     <div class="mc-opts ${done ? 'done' : ''}">${choices.map((o, k) => {
       const cls = done ? (o.ok ? 'right' : k === picked ? 'wrong' : '') : '';
-      return `<button class="mc-opt ${cls}" data-k="${k}" ${done ? 'disabled' : ''}><span class="no">${f.kind === 'question' ? circ(k + 1) : k + 1}</span><span>${esc(o.t)}</span></button>`;
+      return `<button class="mc-opt ${cls}" data-k="${k}" ${done ? 'disabled' : ''}><span class="no">${f.kind === 'question' ? circ(k + 1) : k + 1}</span><span>${rich(o.t)}</span></button>`;
     }).join('')}</div>
     ${done && f.ai.length ? `<div class="ans" style="margin-top:12px">${photoBlock(f.ai)}</div>` : ''}
     ${done && f.kind !== 'basic' ? exHTML(f) : ''}`;

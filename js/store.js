@@ -308,6 +308,28 @@ export async function removeImageIfUnused(id) {
 const blobToDataURL = (b) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(b); });
 const dataURLToBlob = async (d) => (await fetch(d)).blob();
 async function storeDataURL(id, d) { try { await putImage(await dataURLToBlob(d), id); return true; } catch (_) { return false; } }
+// v2.4: 사진을 긴 변 1600px JPEG로 줄이기 (편집기 첨부·카드팩 불러오기 공통). 줄일 수 없으면 원본 그대로.
+export const MAX_SIDE = 1600;
+export async function shrinkImage(file) {
+  let src, w, h, close = () => {};
+  try {
+    try {
+      const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+      src = bmp; w = bmp.width; h = bmp.height; close = () => bmp.close && bmp.close();
+    } catch (_) {
+      const url = URL.createObjectURL(file);
+      const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+      src = img; w = img.naturalWidth; h = img.naturalHeight; close = () => URL.revokeObjectURL(url);
+    }
+    const k = Math.min(1, MAX_SIDE / Math.max(w, h));
+    if (k === 1 && file.type === 'image/jpeg' && file.size < 900000) { close(); return file; }
+    const cw = Math.round(w * k), ch = Math.round(h * k);
+    const cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
+    const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, cw, ch); g.drawImage(src, 0, 0, cw, ch);
+    close();
+    return (await new Promise((res) => cv.toBlob(res, 'image/jpeg', 0.86))) || file;
+  } catch (_) { close(); return file; }
+}
 // v2.2 정답 돌려쓰기: 어떤 정답이 몇 번 나왔고(seen) 몇 번 맞혔는지(hits)
 export function noteRot(c, ans, ok) {
   if (!c || !ans) return;
@@ -480,6 +502,7 @@ function targetFolder(names, target, create) {
   return create ? ensureFolderPath(names) : findFolderPath(names);
 }
 export function previewPack(d, target = null) {
+  const files = d._files instanceof Map ? d._files : null;
   const rows = (d.cards || []).map((c) => {
     const kind = c.kind === 'question' || c.kind === 'q' ? 'question' : c.kind === 'cloze' ? 'cloze' : 'basic';
     const r = {
@@ -487,8 +510,21 @@ export function previewPack(d, target = null) {
       term: String((kind === 'question' ? c.stem ?? c.term : kind === 'cloze' ? c.text ?? c.term : c.term) ?? '').trim(),
       def: String((kind === 'question' ? c.explain ?? c.def : kind === 'cloze' ? c.note ?? c.def : c.def) ?? '').trim(),
       rating: c.rating !== undefined && c.rating !== null && c.rating !== '' ? Math.max(0, Math.min(5, +c.rating)) : (c.star ? 5 : null),
-      imgs: kind === 'cloze' ? [] : Array.isArray(c.imgs) ? c.imgs.filter((x) => typeof x === 'string' && x.startsWith('data:image')) : [],
+      imgs: [], imgMiss: [],
     };
+    // v2.4 사진: data:image… 문자열 또는 zip·함께 고른 사진 파일의 이름("p161-1.jpg"). 빈칸 카드는 사진을 넣지 않는다.
+    if (kind !== 'cloze') {
+      const src = Array.isArray(c.imgs) ? c.imgs : c.img ? [c.img] : c.image ? [c.image] : [];
+      for (const x of src) {
+        if (typeof x !== 'string' || !x.trim()) continue;
+        if (x.startsWith('data:image')) r.imgs.push({ data: x, sig: `d${x.length}:${x.slice(-24)}` });
+        else {
+          const nm = x.trim().split(/[\\/]/).pop(); const b = files && files.get(nm.toLowerCase());
+          if (b) r.imgs.push({ blob: b, name: nm, sig: `f${nm}:${b.size}` }); else r.imgMiss.push(nm);
+        }
+      }
+    }
+    r.isig = r.imgs.map((o) => o.sig).join('|');
     const strip = (a) => (Array.isArray(a) ? a : []).map((x) => String(x ?? '').replace(/^\s*[①②③④⑤⑥⑦⑧⑨⑩]\s*/, '').trim()).filter(Boolean);
     if (kind === 'question' && Array.isArray(c.answers) && strip(c.answers).length) { r.answers = strip(c.answers); r.wrong = strip(c.wrong); if (c.group) r.group = String(c.group); }
     else if (kind === 'question') { r.choices = (Array.isArray(c.choices) ? c.choices : []).map((x) => String(x ?? '').replace(/^\s*[①②③④⑤⑥⑦⑧⑨⑩]\s*/, '').trim()); r.answer = packAnswer(c.answer); }
@@ -497,7 +533,7 @@ export function previewPack(d, target = null) {
   return rows.map((c) => {
     const f = targetFolder(splitPath(c.folder), target, false);
     const s = f && setsOf(f.id).find((x) => x.name === c.set);
-    const dup = s && cardsOf(s.id).some((x) => x.term === c.term && x.def === c.def);
+    const dup = s && cardsOf(s.id).some((x) => x.term === c.term && x.def === c.def && (x.isig || '') === c.isig);
     const label = f ? folderPathLabel(f.id) : target && target.id ? [folderPathLabel(target.id), ...splitPath(c.folder)].join(' › ') : c.folder;
     return { ...c, src: c.src || c.folder, folder: label, newFolder: !f, newSet: !s, dup: !!dup };
   });
@@ -508,9 +544,16 @@ export async function applyPack(rows, target = null) {
     if (c.dup || c.skip) { skipped++; continue; }
     const f = targetFolder(splitPath(c.src || c.folder), target, true);
     const s = setsOf(f.id).find((x) => x.name === c.set) || addSet(f.id, c.set);
-    if (cardsOf(s.id).some((x) => x.term === c.term && x.def === c.def)) { skipped++; continue; }
+    const isig = c.isig || '';
+    if (cardsOf(s.id).some((x) => x.term === c.term && x.def === c.def && (x.isig || '') === isig)) { skipped++; continue; }
     const card = newCard(s.id, c.term, c.def, undefined, c.kind !== 'basic' ? c : null); if (c.rating !== null && c.rating !== undefined) card.rating = c.rating;
-    for (const d of c.imgs || []) { const id = 'i' + uid(); if (await storeDataURL(id, d)) card.imgs.push(id); }
+    for (const o of c.imgs || []) {
+      try {
+        const raw = o.blob || (typeof o === 'string' ? await dataURLToBlob(o) : await dataURLToBlob(o.data));
+        card.imgs.push(await putImage(await shrinkImage(raw)));
+      } catch (_) {}
+    }
+    if (isig) card.isig = isig;
     added++;
   }
   await save(true);

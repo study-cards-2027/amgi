@@ -471,3 +471,49 @@ hr.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }
 .chip.sm { padding: 4px 10px; font-size: 13px; min-height: 30px; }
 .mv-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); cursor: pointer; }
 .mv-row input { width: 20px; height: 20px; margin-top: 2px; accent-color: var(--primary); flex: none; }
+
+/* ---------- v2.4: 카드 안 표 ---------- */
+.rt { width: 100%; min-width: 0; text-align: left; }
+.rt-p { display: block; }
+.tbl-box { position: relative; max-width: 100%; margin: 6px 0; }
+.tbl-wrap { max-width: 100%; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; touch-action: pan-x pan-y; padding-top: 2px; }
+/* 넓은 표: 오른쪽 가장자리 그림자 + 안내 (끝까지 밀면 사라짐) */
+.tbl-box.wide::after { content: ''; position: absolute; top: 0; right: 0; bottom: 22px; width: 28px; pointer-events: none; background: linear-gradient(to right, transparent, rgba(0,0,0,.16)); border-radius: 0 6px 6px 0; transition: opacity .2s; }
+.tbl-box.wide.at-end::after { opacity: 0; }
+.tbl-box.wide::before { content: '↔ 밀어서 보기 · ⤢ 크게'; display: block; position: absolute; left: 0; bottom: 0; font-size: 12px; line-height: 20px; color: var(--muted); font-weight: 600; white-space: nowrap; }
+.tbl-box.wide { padding-bottom: 22px; }
+.tbl-zoom { position: absolute; top: -2px; right: -2px; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; background: var(--surface); border: 1px solid var(--line); color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer; box-shadow: var(--shadow); z-index: 2; user-select: none; -webkit-user-select: none; }
+.tbl-zoom:hover, .tbl-zoom:focus-visible { color: var(--primary); border-color: var(--primary); }
+.tbl-box table.ct { margin-right: 30px; }
+/* 전체 화면 표 */
+.tbl-viewer { position: fixed; inset: 0; z-index: 1000; background: var(--bg); display: flex; flex-direction: column; }
+.tv-top { display: flex; gap: 8px; align-items: center; padding: calc(10px + env(safe-area-inset-top)) 12px 10px; background: var(--surface); box-shadow: var(--shadow); }
+.tv-sp { flex: 1; }
+.tv-btn { min-height: 44px; min-width: 52px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); font-weight: 800; font-size: 16px; cursor: pointer; }
+.tv-body { flex: 1; overflow: auto; padding: 16px 16px calc(24px + env(safe-area-inset-bottom)); -webkit-overflow-scrolling: touch; touch-action: pan-x pan-y pinch-zoom; }
+.tv-body table.ct { font-size: 17px; line-height: 1.6; background: var(--surface); margin: 0; min-width: 0; }
+.tv-body table.ct th, .tv-body table.ct td { padding: 8px 12px; min-width: 6em; max-width: 26em; }
+table.ct { border-collapse: collapse; font-size: .82em; line-height: 1.55; white-space: pre-wrap; word-break: keep-all; overflow-wrap: break-word; min-width: 60%; }
+/* 칸이 글자 하나 폭으로 찌그러지지 않게: 낱말(어절) 중간에서는 줄을 바꾸지 않는다 → 좁은 화면에서는 표가 넓어지고 가로로 민다 */
+table.ct th, table.ct td { overflow-wrap: break-word; word-break: keep-all; }
+table.ct th, table.ct td { border: 1px solid var(--line); padding: 6px 10px; vertical-align: top; text-align: left; min-width: 4.5em; max-width: 22em; }
+table.ct th { background: var(--surface-2); font-weight: 800; }
+table.ct .cz { line-height: 1.4; margin: 1px; }
+.cz-text table.ct { line-height: 1.7; }
+.flip .face > .txt, .qa .txt, .mc-opt > span:last-child { min-width: 0; max-width: 100%; }
+.qa .txt > .rt, .flip .face .txt > .rt { flex: 1; }
+.term-row table.ct { font-size: 13px; }
+.term-row table.ct th, .term-row table.ct td { padding: 4px 6px; min-width: 4em; }
+@media (max-width: 640px) { table.ct { font-size: .78em; } table.ct th, table.ct td { padding: 5px 7px; } }
+.ed-prev { margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); font-size: 15px; }
+.ed-prev .cz-text { line-height: 1.9; }
+.btn.sm.on { background: var(--primary-soft); }
+.pv-ph { display: flex; gap: 4px; margin-top: 6px; align-items: center; }
+.pv-ph img { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); }
+.pv-ph span { font-size: 12px; color: var(--muted); }
+/* 표가 든 카드 목록이 좁은 화면에서 페이지 폭을 밀어내지 않게 (그리드 칸 최소 폭 0) */
+.term-row > div { min-width: 0; }
+@media (max-width: 600px) { .term-row { grid-template-columns: minmax(0, 1fr) auto; } }
+.pv td { min-width: 0; }
+.pv td .tbl-box { max-width: min(100%, 72vw); }
+.ed-row, .ed-cz, .ed-cz > div, .ed-prev { min-width: 0; max-width: 100%; }
