@@ -131,7 +131,29 @@ export const folderAlive = (fid) => {
   for (let f = S.folders[fid], k = 0; f && k < 50; f = S.folders[pid(f)], k++) { if (f.del) return false; if (!pid(f)) return true; }
   return false;
 };
-export const subfolders = (parentId = null) => Object.values(S.folders).filter((f) => alive(f) && pid(f) === (parentId || null) && folderAlive(f.id)).sort(byOrder);
+// v2.5 국시 과목 순: 한의사 국가시험 교시 순서(1교시 내과학1 → 2교시 내과학2·침구학·법규 → 3교시 외과·신경정신·안이비인후·부인 → 4교시 소아·예방·생리·본초).
+// 최상위 폴더 이름에 든 낱말로 과목을 찾는다. 같은 과목 안에서는 kw 순서(예: 간계 → 심계 → 비계 → 폐계 → 신계), 그다음 내가 정한 순서.
+export const KUKSI = [
+  { name: '내과학', note: '1·2교시 · 112문항', kw: ['간계', '심계', '비계', '폐계', '신계', '상한', '온병', '사상', '내과'] },
+  { name: '침구학', note: '2교시 · 48문항', kw: ['침구', '경락', '경혈'] },
+  { name: '보건의약관계법규', note: '2교시 · 20문항', kw: ['법규', '의료법', '보건의약'] },
+  { name: '외과학', note: '3교시 · 16문항', kw: ['외과', '피부'] },
+  { name: '신경정신과학', note: '3교시 · 16문항', kw: ['신경정신', '신경', '정신'] },
+  { name: '안이비인후과학', note: '3교시 · 16문항', kw: ['안이비인후', '안과', '이비인후'] },
+  { name: '부인과학', note: '3교시 · 32문항', kw: ['부인'] },
+  { name: '소아과학', note: '4교시 · 24문항', kw: ['소아'] },
+  { name: '예방의학', note: '4교시 · 24문항', kw: ['예방', '양생'] },
+  { name: '한방생리학', note: '4교시 · 16문항', kw: ['생리'] },
+  { name: '본초학', note: '4교시 · 16문항', kw: ['본초'] },
+];
+export function kuksiOf(name) {
+  const n = String(name || '').replace(/\s+/g, '');
+  for (let g = 0; g < KUKSI.length; g++) { const k = KUKSI[g].kw.findIndex((w) => n.includes(w)); if (k >= 0) return { g, k }; }
+  return { g: KUKSI.length, k: 0 }; // 국시 과목이 아닌 폴더는 맨 뒤
+}
+export const kuksiOn = () => S.settings.kuksiSort !== false;
+const byKuksi = (a, b) => { const x = kuksiOf(a.name), y = kuksiOf(b.name); return x.g - y.g || x.k - y.k || byOrder(a, b); };
+export const subfolders = (parentId = null) => Object.values(S.folders).filter((f) => alive(f) && pid(f) === (parentId || null) && folderAlive(f.id)).sort(!parentId && kuksiOn() ? byKuksi : byOrder);
 export const folders = () => subfolders(null);
 // 깊이 우선으로 모든 폴더 [{f, depth}]
 export function folderTree(parentId = null, depth = 0, out = []) {
@@ -332,7 +354,7 @@ export async function shrinkImage(file) {
 }
 // v2.2 정답 돌려쓰기: 어떤 정답이 몇 번 나왔고(seen) 몇 번 맞혔는지(hits)
 export function noteRot(c, ans, ok) {
-  if (!c || !ans) return;
+  if (!c || !ans || !Array.isArray(c.answers)) return; // 돌려쓰기 카드만 (빈칸 객관식의 물은 정답은 기록하지 않음)
   if (!c.p) c.p = blankProgress();
   c.p.seen = c.p.seen || {}; c.p.hits = c.p.hits || {};
   c.p.seen[ans] = (c.p.seen[ans] || 0) + 1;

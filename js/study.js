@@ -2,6 +2,7 @@
 import * as st from './store.js';
 import { $, $$, esc, I, shuffle, toast, confirmBox, fmtDur, starsHTML, pickRating } from './ui.js';
 import { photoBlock, hydrate, pickOne } from './media.js';
+import * as K from './kinds.js'; // v2.5 새 함수는 K.로 (업데이트 중 옛 kinds.js가 섞여도 불러오기 오류가 나지 않게)
 import { kindOf, clozeHTML, clozeAnswers, clozeCount, clozePlain, fixedChoices, qAnswerText, listHTML, circ, rich, hasTable, isRot, rotAnswers, pickTarget, rotChoices, groupKey } from './kinds.js';
 
 export let session = null;
@@ -30,11 +31,21 @@ function promptHTML(f, cz = {}, extra = '') {
 }
 const exHTML = (f) => (f.ex ? `<div class="ans ex"><div class="lab">${f.exl}</div><div class="txt">${rich(f.ex)}</div></div>` : '');
 // 직접 채점 영역: 정답 보기 전/후
+// v2.5 묻는 빈칸(변증만·처방만)이면 다른 종류 빈칸은 미리 열어 둔다. 변증을 물을 때 처방은 가린 채로.
+function czPre(f, s) {
+  const want = s.opts && s.opts.blank;
+  if (f.kind !== 'cloze' || !want || want === 'all' || !K.clozeTypes) return new Set();
+  const ty = K.clozeTypes(f.q); const pre = new Set();
+  ty.forEach((t, i) => { if (!(t === want || (want === 'dx' && t === 'rx'))) pre.add(i); });
+  return pre;
+}
 function selfHTML(f, s) {
   if (f.kind === 'cloze') {
-    const opened = s.cz ? s.cz.size : 0;
-    return `${promptHTML(f, { open: s.cz, all: s.revealed, tap: !s.revealed })}
-      ${s.revealed ? exHTML(f) : `<div class="row small muted" style="margin-top:10px;justify-content:center">빈칸을 누르면 하나씩 열려요 (${opened}/${f.n})</div>
+    const pre = czPre(f, s);
+    const open = new Set([...(s.cz || []), ...pre]);
+    const opened = [...(s.cz || [])].filter((i) => !pre.has(i)).length;
+    return `${promptHTML(f, { open, all: s.revealed, tap: !s.revealed })}
+      ${s.revealed ? exHTML(f) : `<div class="row small muted" style="margin-top:10px;justify-content:center">빈칸을 누르면 하나씩 열려요 (${opened}/${f.n - pre.size})</div>
       <div style="margin-top:10px"><button class="btn primary block" style="min-height:60px;font-size:18px" data-reveal>${opened ? '나머지 모두 보기' : '모두 보기'}</button></div>`}`;
   }
   return `${promptHTML(f)}
@@ -48,7 +59,7 @@ function bindSelf(f, s, rerender) {
   if (f.kind === 'cloze') {
     $$('.cz.tap').forEach((el) => (el.onclick = (e) => {
       e.stopPropagation(); s.cz = s.cz || new Set(); s.cz.add(+el.dataset.cz);
-      if (s.cz.size >= f.n) s.revealed = true; rerender();
+      const pre = czPre(f, s); if ([...s.cz].filter((i) => !pre.has(i)).length >= f.n - pre.size) s.revealed = true; rerender();
     }));
   } else { const q = $('#q'); if (q) q.onclick = reveal; }
   return reveal;
@@ -61,7 +72,7 @@ function mcFor(c, f, s, how) {
   }
   if (f.kind === 'question') return s.choices[c.id] || (s.choices[c.id] = { ch: fixedChoices(c, !!st.S.settings.qShuffle) });
   if (how !== 'mc') return null;
-  const x = s.choices[c.id] || (s.choices[c.id] = f.kind === 'cloze' ? clozeMC(c, s.src) : { ch: buildChoices(c, f, s.src) });
+  const x = s.choices[c.id] || (s.choices[c.id] = f.kind === 'cloze' ? clozeMC(c, s.src, (s.opts && s.opts.blank) || 'all') : { ch: buildChoices(c, f, s.src) });
   return x.ch ? x : null;
 }
 // v2.2 정답 돌려쓰기: 이번에 정답으로 낼 처방 고르기
@@ -87,7 +98,7 @@ function buildGroups(s, list) {
   for (const g of Object.values(s.groups)) { g.units = Math.max(g.cards.length, g.all.size); total += g.units; }
   return total;
 }
-const ansItem = (c, mc, ok) => (mc && mc.ans ? [c.id, ok ? 1 : 0, mc.ans] : [c.id, ok ? 1 : 0]);
+const ansItem = (c, mc, ok) => (mc && mc.ans ? [c.id, ok ? 1 : 0, mc.ans] : [c.id, ok ? 1 : 0]); // 빈칸 객관식은 mc.ans = 물은 빈칸의 정답
 const resetItem = (s) => { s.picked = null; s.revealed = false; s.cz = new Set(); };
 
 // 별점 버튼 (카드 자체 별점, 없으면 물려받은 별점을 흐리게)
@@ -110,12 +121,19 @@ export function start(mode, cards, opts = {}) {
   let list = cards.slice();
   if (opts.filter === 'wrong') list = list.filter((c) => c.p && c.p.wrong);
   if (opts.ratings && opts.ratings.length) { const allow = new Set(opts.ratings); list = list.filter((c) => st.ratingOk(c, allow)); }
+  // v2.5 묻는 빈칸: 변증만·처방만이면 그 종류 빈칸이 없는 빈칸 카드는 뺀다(다른 형식 카드는 그대로)
+  if (opts.blank && opts.blank !== 'all' && mode !== 'review') {
+    const before = list.length;
+    list = list.filter((c) => kindOf(c) !== 'cloze' || K.clozeTargets(c.term, opts.blank).length);
+    if (list.length < before && list.length) toast(`${K.BLANK_LABEL[opts.blank]} 빈칸이 없는 카드 ${before - list.length}장은 뺐어요`, 2500);
+  }
+  dxIndex = null;
   if (mode !== 'review') {
     if (opts.shuffle) list = shuffle(list);
     if (opts.count && opts.count > 0) list = list.slice(0, opts.count);
   }
   if (mode === 'review') return startReview(list, opts);
-  if (!list.length) { toast('조건에 맞는 카드가 없습니다.'); return false; }
+  if (!list.length) { toast(opts.blank && opts.blank !== 'all' ? `${K.BLANK_LABEL[opts.blank]} 빈칸이 있는 카드가 없어요.` : '조건에 맞는 카드가 없습니다.', 3000); return false; }
   if (mode === 'match') {
     list = list.filter((c) => kindOf(c) === 'basic');
     if (list.length < 2) { toast('매칭은 기본(용어–정의) 카드가 2장 이상 필요합니다. 확인문제·빈칸 카드는 매칭에 나오지 않아요.', 3500); return false; }
@@ -583,34 +601,64 @@ function buildChoices(c, f, srcIds) {
   return shuffle([{ t: ans || '(내용 없음)', ok: true }, ...out.map((t) => ({ t, ok: false }))]);
 }
 // 빈칸 객관식: 빈칸 하나를 골라 묻고, 오답 보기는 다른 빈칸 카드의 정답(같은 단원 → 폴더 → 상위 → 범위 → 전체)
-function clozeMC(c, srcIds) {
+// v2.5: want(전체·변증·처방)에 맞는 빈칸만 묻고, 오답 보기는 물은 빈칸과 같은 종류(변증이면 변증, 처방이면 처방)만.
+//       처방을 물으면 같은 변증의 다른 정답 처방은 본문에서 가리고 보기에서도 뺀다(다른 카드에 있어도).
+const nz = (t) => String(t).replace(/\s+/g, '');
+let dxIndex = null; // 변증 이름 묶음 → 그 변증의 처방들 (카드가 바뀌면 다시 만듦)
+function rxOfSameDx(dxKey) {
+  const sig = st.S.cards ? Object.keys(st.S.cards).length + ':' + (st.S.rev || 0) : '';
+  if (!dxIndex || dxIndex.sig !== sig) {
+    const m = new Map();
+    for (const x of st.allCards()) {
+      if (kindOf(x) !== 'cloze') continue;
+      const ty = K.clozeTypes(x.term), an = clozeAnswers(x.term);
+      const dk = an.filter((_, i) => ty[i] === 'dx').map(nz).sort().join('·'); if (!dk) continue;
+      const set = m.get(dk) || new Set(); an.forEach((t, i) => { if (ty[i] === 'rx') set.add(nz(t)); }); m.set(dk, set);
+    }
+    dxIndex = { sig, m };
+  }
+  return dxIndex.m.get(dxKey) || new Set();
+}
+function clozeMC(c, srcIds, want = 'all') {
   const ans = clozeAnswers(c.term); if (!ans.length) return { ch: null };
-  const target = Math.floor(Math.random() * ans.length);
-  const norm = (t) => String(t).replace(/\s+/g, '');
-  const seen = new Set(ans.map(norm));
+  const ty = K.clozeTypes(c.term);
+  const cand = K.clozeTargets(c.term, want);
+  const target = cand.length ? cand[Math.floor(Math.random() * cand.length)] : Math.floor(Math.random() * ans.length);
+  const tt = ty[target] || '';
+  const hide = K.clozeHide(ty, target);
+  const seen = new Set(ans.map(nz));
+  if (tt === 'rx') { const dk = ans.filter((_, i) => ty[i] === 'dx').map(nz).sort().join('·'); if (dk) rxOfSameDx(dk).forEach((k) => seen.add(k)); }
   const set = st.S.sets[c.setId]; const tiers = [];
   if (set) { tiers.push(st.cardsOf(set.id)); for (const fo of st.folderPath(set.folderId).reverse()) tiers.push(st.setsUnder(fo.id).flatMap((x) => st.cardsOf(x.id))); }
   tiers.push((srcIds || []).map((id) => st.S.cards[id]).filter((x) => x && !x.del));
   tiers.push(st.allCards());
-  const out = [];
-  for (const tier of tiers) {
-    for (const x of shuffle(tier)) {
-      if (x.id === c.id || kindOf(x) !== 'cloze') continue;
-      for (const t of shuffle(clozeAnswers(x.term))) {
-        const k = norm(t); if (!k || seen.has(k)) continue;
-        seen.add(k); out.push(t); break;
+  const pick = (sameOnly) => {
+    const out = [];
+    for (const tier of tiers) {
+      for (const x of shuffle(tier)) {
+        if (x.id === c.id || kindOf(x) !== 'cloze') continue;
+        const xa = clozeAnswers(x.term); const xt = tt || sameOnly ? K.clozeTypes(x.term) : null;
+        for (const i of shuffle(xa.map((_, k) => k))) {
+          if (xt && xt[i] !== tt) continue;
+          const t = xa[i]; const k = nz(t); if (!k || seen.has(k)) continue;
+          seen.add(k); out.push(t); break;
+        }
+        if (out.length >= 4) break;
       }
       if (out.length >= 4) break;
     }
-    if (out.length >= 4) break;
-  }
-  if (out.length < 2) return { ch: null }; // 보기가 3개 미만이면 직접 채점으로
-  return { target, ch: shuffle([{ t: ans[target], ok: true }, ...out.map((t) => ({ t, ok: false }))]) };
+    return out;
+  };
+  // 변증·처방은 같은 종류로만. 종류를 모르는 빈칸은 아무 빈칸 정답이나(예전과 같음)
+  const out = pick(!!tt);
+  if (out.length < 2) return { ch: null, target, hide, tt }; // 보기가 3개 미만이면 직접 채점으로
+  return { target, hide, tt, ans: ans[target], ch: shuffle([{ t: ans[target], ok: true }, ...out.map((t) => ({ t, ok: false }))]) };
 }
 function mcHTML(f, mc, picked) {
   const choices = mc.ch;
   const done = picked !== null && picked !== undefined;
-  const prompt = f.kind === 'cloze' ? promptHTML(f, done ? { all: true } : { target: mc.target }, ` · <span class="pill">${circ(mc.target + 1)}에 들어갈 말은?</span>`) : promptHTML(f);
+  const q = mc.tt === 'rx' ? '처방은' : mc.tt === 'dx' ? '변증은' : mc.tt === 'bj' ? '병증은' : '말은';
+  const prompt = f.kind === 'cloze' ? promptHTML(f, done ? { all: true } : { target: mc.target, hide: mc.hide }, ` · <span class="pill">${circ(mc.target + 1)}에 들어갈 ${q}?</span>`) : promptHTML(f);
   return `${prompt}
     <div class="mc-opts ${done ? 'done' : ''}">${choices.map((o, k) => {
       const cls = done ? (o.ok ? 'right' : k === picked ? 'wrong' : '') : '';

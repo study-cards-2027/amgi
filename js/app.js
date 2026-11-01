@@ -135,9 +135,20 @@ function home() {
   <div class="row" style="margin-top:22px"><h2 style="margin:0">폴더</h2><span class="spacer"></span>
     <a class="btn sm" href="#/import">${I.import} 가져오기</a>
     <button class="btn sm primary" id="addF">${I.plus} 폴더</button></div>
-  <div class="grid2" style="margin-top:12px">${fs.map(folderTile).join('')}</div>
+  <div class="grid2" style="margin-top:12px">${folderTiles(fs)}</div>
   ${fs.length ? '' : `<div class="empty"><div class="big">📚</div><p>아직 폴더가 없어요.<br>「+ 폴더」로 상한론, 본초학 같은 과목 폴더를 만들어 보세요.</p></div>`}`;
   $('#addF').onclick = async () => { const n = await ask('새 폴더', '', '예: 상한론'); if (n) { const f = st.addFolder(n); go('#/f/' + f.id); } };
+}
+
+// v2.5 국시 과목 순이면 과목이 바뀔 때마다 과목 머리글
+function folderTiles(fs) {
+  if (!st.kuksiOn || !st.kuksiOn()) return fs.map(folderTile).join('');
+  let last = -1;
+  return fs.map((f) => {
+    const { g } = st.kuksiOf(f.name); let h = '';
+    if (g !== last) { const K = st.KUKSI[g]; h = `<div class="grp-h">${K ? `${esc(K.name)} <span>${esc(K.note)}</span>` : '그 밖의 폴더'}</div>`; last = g; }
+    return h + folderTile(f);
+  }).join('');
 }
 
 // ================================================================ 폴더 (하위 폴더 + 단원)
@@ -681,7 +692,7 @@ function picker(q = {}) {
     mode: q.mode || last.mode || 'test',
     sel: new Set(),
     shuffle: last.shuffle ?? true, dir: last.dir || 'term', filter: q.filter === 'wrong' ? 'wrong' : 'all', count: last.count || 0,
-    ratings: new Set(last.ratings || []), answer: last.answer || 'mc',
+    ratings: new Set(last.ratings || []), answer: last.answer || 'mc', blank: ['all', 'dx', 'rx'].includes(last.blank) ? last.blank : 'all',
   };
   if (!['flash', 'test', 'mc', 'learn', 'match', 'review'].includes(P.mode)) P.mode = 'test';
   const allSets = st.orderedSets();
@@ -762,6 +773,8 @@ function picker(q = {}) {
       <div class="switch" style="flex-wrap:wrap"><span>별점 <span class="muted small">(여러 개 선택 가능 · 안 고르면 전체)</span></span>
         <div class="row" id="rsg" style="gap:6px">${[5, 4, 3, 2, 1, 0, 'none'].map((k) => `<button class="chip chip-r ${P.ratings.has(k) ? 'on' : ''}" data-r="${k}">${k === 'none' ? '없음' : '★' + k}<span class="c">${rc(k)}</span></button>`).join('')}</div></div>
       ${P.mode === 'learn' ? `<div class="switch"><span>답하는 방식</span><div class="seg" id="asg">${[['mc', '객관식'], ['self', '직접 채점(O/X)']].map(([k, l]) => `<button data-v="${k}" class="${P.answer === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>` : ''}
+      ${['test', 'mc', 'learn'].includes(P.mode) ? `<div class="switch"><span>묻는 빈칸 <span class="muted small">(빈칸 카드)</span></span><div class="seg" id="bsg">${[['all', '전체'], ['dx', '변증만'], ['rx', '처방만']].map(([k, l]) => `<button data-v="${k}" class="${P.blank === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+        ${P.blank !== 'all' ? `<p class="muted small" style="margin:2px 0 10px">${P.blank === 'rx' ? '처방 빈칸만 묻고 보기도 처방으로만. 같은 변증의 다른 처방은 가려요.' : '변증(맨 앞 용어) 빈칸만 묻고 보기도 변증으로만. 처방은 가려요.'} 해당 빈칸이 없는 빈칸 카드는 빠져요.</p>` : ''}` : ''}
       ${['test', 'flash', 'mc', 'learn'].includes(P.mode) ? `<div class="switch"><span>문제 수</span><select class="input" id="cnt" style="width:auto">${[0, 10, 20, 30, 50, 100].map((v) => `<option value="${v}" ${+P.count === v ? 'selected' : ''}>${v ? v + '개' : '전부'}</option>`).join('')}</select></div>` : ''}
     </div>
     <div class="pick-bar">
@@ -789,13 +802,14 @@ function picker(q = {}) {
     $$('#fsg button').forEach((b) => (b.onclick = () => { P.filter = b.dataset.v; draw(); }));
     $$('#rsg [data-r]').forEach((b) => (b.onclick = () => { const k = b.dataset.r === 'none' ? 'none' : +b.dataset.r; P.ratings.has(k) ? P.ratings.delete(k) : P.ratings.add(k); draw(); }));
     $$('#asg button').forEach((b) => (b.onclick = () => { P.answer = b.dataset.v; draw(); }));
+    $$('#bsg button').forEach((b) => (b.onclick = () => { P.blank = b.dataset.v; draw(); }));
     const cn = $('#cnt'); if (cn) cn.onchange = () => { P.count = +cn.value; draw(); };
     $('#go').onclick = () => {
       const sets = [...P.sel];
-      st.S.local.lastPick = { mode: P.mode, sets, shuffle: P.shuffle, dir: P.dir, count: P.count, ratings: [...P.ratings], answer: P.answer }; st.save();
+      st.S.local.lastPick = { mode: P.mode, sets, shuffle: P.shuffle, dir: P.dir, count: P.count, ratings: [...P.ratings], answer: P.answer, blank: P.blank }; st.save();
       const idx = new Map(allSets.map((x, i) => [x.id, i]));
       const cards = st.cardsIn(sets).sort((a, b) => idx.get(a.setId) - idx.get(b.setId) || (a.order ?? 0) - (b.order ?? 0));
-      study.start(P.mode, cards, { title: scopeLabel(sets), shuffle: P.shuffle, dir: P.dir, filter: P.filter, ratings: [...P.ratings], answer: P.answer, count: P.count, key: 'p:' + sets.sort().join(',') });
+      study.start(P.mode, cards, { title: scopeLabel(sets), shuffle: P.shuffle, dir: P.dir, filter: P.filter, ratings: [...P.ratings], answer: P.answer, blank: ['test', 'mc', 'learn'].includes(P.mode) ? P.blank : 'all', count: P.count, key: 'p:' + sets.sort().join(',') });
     };
   };
   draw();
@@ -893,6 +907,7 @@ async function settingsView() {
     <div class="switch"><span>국가고시 날짜</span><input class="input" type="date" id="exam" value="${esc(S.examDate)}" style="width:auto"></div>
     <div class="switch"><span>복습: 하루 새 카드 수</span><input class="input" type="number" min="0" max="999" id="npd" value="${S.newPerDay}" style="width:100px"></div>
     <div class="switch"><span>오답노트에서 빠지는 연속 정답 수</span><input class="input" type="number" min="1" max="10" id="grad" value="${S.gradStreak}" style="width:100px"></div>
+    <div class="switch"><span>폴더를 국시 과목 순으로 정렬 <span class="muted small">(내과 → 침구 → 법규 → 외과 → 신경정신 → 안이비인후 → 부인 → 소아 → 예방 → 생리 → 본초. 끄면 내가 정한 순서)</span></span><label class="toggle"><input type="checkbox" id="ksort" ${st.kuksiOn && st.kuksiOn() ? 'checked' : ''}><span></span></label></div>
     <div class="switch"><span>확인문제 보기 순서 섞기 <span class="muted small">(끄면 교재·국시 문제 순서 그대로)</span></span><label class="toggle"><input type="checkbox" id="qsh" ${S.qShuffle ? 'checked' : ''}><span></span></label></div>
   </div>
   <h2>화면</h2>
@@ -904,7 +919,7 @@ async function settingsView() {
   </div>
   <h2>위험 구역</h2>
   <div class="card"><button class="btn ng" id="reset">이 기기의 모든 데이터 삭제</button></div>
-  <p class="muted small" style="margin-top:24px">한의 암기노트 v2.4 · 복습 일정은 Anki의 FSRS 알고리즘(ts-fsrs, MIT)을 사용합니다.</p>`;
+  <p class="muted small" style="margin-top:24px">한의 암기노트 v2.5 · 복습 일정은 Anki의 FSRS 알고리즘(ts-fsrs, MIT)을 사용합니다.</p>`;
 
   const fname = (ext) => { const d = new Date(); const z = (n) => String(n).padStart(2, '0'); return `암기노트-백업-${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}.${ext}`; };
   $('#exp').onclick = async () => { toast('백업 파일 만드는 중…'); download(fname('json'), JSON.stringify(await st.exportBackup(), null, 1)); st.markExported(); toast('백업 파일을 저장했어요 (다운로드 폴더)'); setTimeout(settingsView, 600); };
@@ -918,6 +933,7 @@ async function settingsView() {
   $('#file').onchange = (e) => { const fl = [...e.target.files]; e.target.value = ''; if (fl.length) importFile(fl); };
   $('#exam').onchange = (e) => { st.setSettings({ examDate: e.target.value }); toast('저장했어요'); };
   $('#npd').onchange = (e) => { st.setSettings({ newPerDay: Math.max(0, +e.target.value || 0) }); toast('저장했어요'); };
+  $('#ksort').onchange = (e) => { st.setSettings({ kuksiSort: e.target.checked }); toast('저장했어요'); };
   $('#qsh').onchange = (e) => { st.setSettings({ qShuffle: e.target.checked }); toast('저장했어요'); };
   $('#grad').onchange = (e) => { st.setSettings({ gradStreak: Math.min(10, Math.max(1, +e.target.value || 2)) }); toast('저장했어요'); };
   $$('#thm button').forEach((b) => (b.onclick = () => { st.S.local.theme = b.dataset.v; st.save(); applyTheme(); settingsView(); }));

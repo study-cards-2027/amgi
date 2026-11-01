@@ -30,13 +30,13 @@ export function clozePlain(text, mode = 'answer') {
 }
 // 화면용 HTML. open: Set(열린 빈칸 번호), all: 전부 열기, target: 객관식으로 묻는 빈칸(다른 빈칸은 열어 둠)
 // v2.4: 본문에 마크다운 표가 있으면 표로 그리고, 칸 안의 빈칸도 순서대로 번호를 매긴다.
-export function clozeHTML(text, { open = null, all = false, target = -1, tap = false } = {}) {
+export function clozeHTML(text, { open = null, all = false, target = -1, tap = false, hide = null } = {}) {
   let k = 0;
   const inl = (seg) => clozeParts(seg).map((p) => {
     if (!p.blank) return esc(p.t);
     const i = k++;
     const isT = target === i;
-    const isOpen = !isT && (all || target >= 0 || (open && open.has(i)));
+    const isOpen = !isT && (all || (target >= 0 && !(hide && hide.has(i))) || (open && open.has(i)));
     const w = Math.min(14, Math.max(3, [...p.t].length * 0.9));
     if (isOpen) return `<span class="cz open" data-cz="${i}"><span class="n">${circ(i + 1)}</span>${esc(p.t)}</span>`;
     return `<span class="cz ${isT ? 'tgt' : ''} ${tap && !isT ? 'tap' : ''}" data-cz="${i}"><span class="n">${circ(i + 1)}</span><span class="gap" style="min-width:${w}em">${isT ? '?' : ''}</span></span>`;
@@ -87,6 +87,56 @@ export function richBlocks(text, inl = esc) {
   flushText();
   return out.join('');
 }
+// ---------- 빈칸 종류 (v2.5) ----------
+// 'dx' = 변증(용어), 'rx' = 처방, 'bj' = 병증·병명, '' = 그 밖. 빈칸 순서(①②…)대로 배열을 돌려준다.
+// 표: 그 칸의 머리글로 판단(변증 / 처방·치방·방제 / 병증·병명). 표 밖: 줄 맨 앞 `{{…}}:` = 변증, 그 줄의 – · → 뒤 빈칸 = 처방.
+export const BLANK_LABEL = { all: '전체', dx: '변증·용어', rx: '처방' };
+const DX_H = /변증|증형|증후/;
+const BJ_H = /병증|병명/;
+const RX_H = /처방|치방|방제|주방|방약/;
+const RX_SUFFIX = /(탕|산|환|음|고|단|전|방|湯|散|丸|飮|膏|丹|煎)(\s*[(（].*[)）])?$/;
+export function clozeTypes(text) {
+  const s = String(text ?? ''); const out = [];
+  const lines = s.split('\n');
+  let head = null;
+  const blanksIn = (t) => clozeParts(t).filter((p) => p.blank);
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    const inTable = TROW.test(l) && ((i + 1 < lines.length && TROW.test(lines[i + 1])) || (i > 0 && TROW.test(lines[i - 1])));
+    if (inTable) {
+      if (TSEP.test(l)) continue;
+      const cs = splitCells(l);
+      if (i + 1 < lines.length && TSEP.test(lines[i + 1])) { head = cs.map((h) => (DX_H.test(h) ? 'dx' : RX_H.test(h) ? 'rx' : BJ_H.test(h) ? 'bj' : '')); cs.forEach((c) => blanksIn(c).forEach(() => out.push(''))); continue; }
+      cs.forEach((c, j) => blanksIn(c).forEach(() => out.push(head ? head[j] || '' : '')));
+      continue;
+    }
+    head = null;
+    const parts = clozeParts(l); let before = '', hasDx = false; const mine = [];
+    parts.forEach((p, k) => {
+      if (!p.blank) { before += p.t; return; }
+      const after = parts[k + 1] && !parts[k + 1].blank ? parts[k + 1].t : '';
+      let t = '';
+      if (!hasDx && /^[\s\d.)(①-⑳·•\-]*$/.test(before) && /^\s*[:：]/.test(after)) { t = 'dx'; hasDx = true; }
+      else if (hasDx && (/[–—→]/.test(before) || RX_SUFFIX.test(p.t))) t = 'rx';
+      mine.push(t); before += p.t;
+    });
+    out.push(...mine);
+  }
+  // 줄을 넘는 빈칸 등으로 개수가 어긋나면 종류를 모른다고 본다
+  return out.length === clozeCount(s) ? out : clozeAnswers(s).map(() => '');
+}
+// 이 카드에서 물을 수 있는 빈칸 번호 (want: 'all' | 'dx' | 'rx')
+export function clozeTargets(text, want = 'all') {
+  const ty = clozeTypes(text);
+  return ty.map((t, i) => i).filter((i) => want === 'all' || ty[i] === want);
+}
+// 물은 빈칸 종류에 따라 정답 확인 전까지 가려 둘 다른 빈칸: 처방 → 다른 처방 / 변증 → 다른 변증 + 처방 전부
+export function clozeHide(types, target) {
+  const tt = types[target]; const hide = new Set();
+  types.forEach((t, i) => { if (i === target) return; if ((tt === 'rx' && t === 'rx') || (tt === 'dx' && (t === 'dx' || t === 'rx'))) hide.add(i); });
+  return hide;
+}
+
 // 일반 글(기본 카드·확인문제·해설 등) 화면용: 표가 있으면 표로, 없으면 그대로
 export const rich = (text) => (hasTable(text) ? `<div class="rt">${richBlocks(text, esc)}</div>` : esc(text));
 

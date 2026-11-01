@@ -517,3 +517,8 @@ table.ct .cz { line-height: 1.4; margin: 1px; }
 .pv td { min-width: 0; }
 .pv td .tbl-box { max-width: min(100%, 72vw); }
 .ed-row, .ed-cz, .ed-cz > div, .ed-prev { min-width: 0; max-width: 100%; }
+
+/* ---------- v2.5: 국시 과목 머리글 ---------- */
+.grp-h { grid-column: 1 / -1; margin: 10px 2px -2px; font-weight: 800; font-size: 15px; color: var(--text); display: flex; align-items: baseline; gap: 8px; }
+.grp-h:first-child { margin-top: 0; }
+.grp-h span { font-size: 12px; font-weight: 600; color: var(--muted); }
