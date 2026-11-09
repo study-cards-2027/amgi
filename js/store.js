@@ -131,20 +131,13 @@ export const folderAlive = (fid) => {
   for (let f = S.folders[fid], k = 0; f && k < 50; f = S.folders[pid(f)], k++) { if (f.del) return false; if (!pid(f)) return true; }
   return false;
 };
-// v2.5 국시 과목 순: 한의사 국가시험 교시 순서(1교시 내과학1 → 2교시 내과학2·침구학·법규 → 3교시 외과·신경정신·안이비인후·부인 → 4교시 소아·예방·생리·본초).
-// 최상위 폴더 이름에 든 낱말로 과목을 찾는다. 같은 과목 안에서는 kw 순서(예: 간계 → 심계 → 비계 → 폐계 → 신계), 그다음 내가 정한 순서.
+// v2.5.1 국시 교시 순: 사용자가 정한 4묶음(1교시 간심비폐신 / 2교시 상한사상침구법규 / 3교시 외과신경안이비부인 / 4교시 소아생리예방본초). 최상위 폴더 이름에 든 낱말로 그룹을 찾는다.
+// 같은 그룹 안에서는 kw 순서(1그룹: 간계 → 심계 → 비계 → 폐계 → 신계), 그다음 내가 정한 순서. 어느 그룹에도 없으면 맨 뒤.
 export const KUKSI = [
-  { name: '내과학', note: '1·2교시 · 112문항', kw: ['간계', '심계', '비계', '폐계', '신계', '상한', '온병', '사상', '내과'] },
-  { name: '침구학', note: '2교시 · 48문항', kw: ['침구', '경락', '경혈'] },
-  { name: '보건의약관계법규', note: '2교시 · 20문항', kw: ['법규', '의료법', '보건의약'] },
-  { name: '외과학', note: '3교시 · 16문항', kw: ['외과', '피부'] },
-  { name: '신경정신과학', note: '3교시 · 16문항', kw: ['신경정신', '신경', '정신'] },
-  { name: '안이비인후과학', note: '3교시 · 16문항', kw: ['안이비인후', '안과', '이비인후'] },
-  { name: '부인과학', note: '3교시 · 32문항', kw: ['부인'] },
-  { name: '소아과학', note: '4교시 · 24문항', kw: ['소아'] },
-  { name: '예방의학', note: '4교시 · 24문항', kw: ['예방', '양생'] },
-  { name: '한방생리학', note: '4교시 · 16문항', kw: ['생리'] },
-  { name: '본초학', note: '4교시 · 16문항', kw: ['본초'] },
+  { name: '1교시', note: '간 · 심 · 비 · 폐 · 신', kw: ['간계', '심계', '비계', '폐계', '신계', '내과'] },
+  { name: '2교시', note: '상한 · 사상 · 침구 · 법규', kw: ['상한', '온병', '사상', '침구', '경락', '경혈', '법규', '의료법', '보건의약'] },
+  { name: '3교시', note: '외과 · 신경정신 · 안이비 · 부인', kw: ['외과', '피부', '신경정신', '신경', '정신', '안이비', '안과', '이비인후', '부인'] },
+  { name: '4교시', note: '소아 · 생리 · 예방 · 본초', kw: ['소아', '생리', '예방', '양생', '본초'] },
 ];
 export function kuksiOf(name) {
   const n = String(name || '').replace(/\s+/g, '');
@@ -248,7 +241,7 @@ export function newCard(setId, term, def, order, extra = null) {
 export function applyKind(c, x) {
   const k = x.kind === 'question' || x.kind === 'cloze' ? x.kind : null;
   if (!k) { delete c.kind; delete c.choices; delete c.answer; delete c.answers; delete c.wrong; delete c.group; return c; }
-  c.kind = k;
+  c.kind = k; delete c.fx; delete c.bx; // 앞면 설명·뒷면 해설은 기본 카드만
   const strs = (a) => (Array.isArray(a) ? a : []).map((v) => String(v ?? '').trim());
   if (k === 'question' && Array.isArray(x.answers)) {
     // v2.2 정답 돌려쓰기
@@ -534,6 +527,8 @@ export function previewPack(d, target = null) {
       rating: c.rating !== undefined && c.rating !== null && c.rating !== '' ? Math.max(0, Math.min(5, +c.rating)) : (c.star ? 5 : null),
       imgs: [], imgMiss: [],
     };
+    // v2.6 기본 카드: 앞면 설명(front_note) · 뒷면 해설(explain)
+    if (kind === 'basic') { r.fx = String(c.front_note ?? c.fx ?? '').trim(); r.bx = String(c.explain ?? c.bx ?? '').trim(); }
     // v2.4 사진: data:image… 문자열 또는 zip·함께 고른 사진 파일의 이름("p161-1.jpg"). 빈칸 카드는 사진을 넣지 않는다.
     if (kind !== 'cloze') {
       const src = Array.isArray(c.imgs) ? c.imgs : c.img ? [c.img] : c.image ? [c.image] : [];
@@ -555,7 +550,7 @@ export function previewPack(d, target = null) {
   return rows.map((c) => {
     const f = targetFolder(splitPath(c.folder), target, false);
     const s = f && setsOf(f.id).find((x) => x.name === c.set);
-    const dup = s && cardsOf(s.id).some((x) => x.term === c.term && x.def === c.def && (x.isig || '') === c.isig);
+    const dup = s && cardsOf(s.id).some((x) => x.term === c.term && x.def === c.def && (x.isig || '') === c.isig && (x.fx || '') === (c.fx || '') && (x.bx || '') === (c.bx || ''));
     const label = f ? folderPathLabel(f.id) : target && target.id ? [folderPathLabel(target.id), ...splitPath(c.folder)].join(' › ') : c.folder;
     return { ...c, src: c.src || c.folder, folder: label, newFolder: !f, newSet: !s, dup: !!dup };
   });
@@ -567,7 +562,7 @@ export async function applyPack(rows, target = null) {
     const f = targetFolder(splitPath(c.src || c.folder), target, true);
     const s = setsOf(f.id).find((x) => x.name === c.set) || addSet(f.id, c.set);
     const isig = c.isig || '';
-    if (cardsOf(s.id).some((x) => x.term === c.term && x.def === c.def && (x.isig || '') === isig)) { skipped++; continue; }
+    if (cardsOf(s.id).some((x) => x.term === c.term && x.def === c.def && (x.isig || '') === isig && (x.fx || '') === (c.fx || '') && (x.bx || '') === (c.bx || ''))) { skipped++; continue; }
     const card = newCard(s.id, c.term, c.def, undefined, c.kind !== 'basic' ? c : null); if (c.rating !== null && c.rating !== undefined) card.rating = c.rating;
     for (const o of c.imgs || []) {
       try {
@@ -576,6 +571,7 @@ export async function applyPack(rows, target = null) {
       } catch (_) {}
     }
     if (isig) card.isig = isig;
+    if (c.kind === 'basic') { if (c.fx) card.fx = c.fx; if (c.bx) card.bx = c.bx; }
     added++;
   }
   await save(true);

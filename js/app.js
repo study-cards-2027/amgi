@@ -140,7 +140,7 @@ function home() {
   $('#addF').onclick = async () => { const n = await ask('새 폴더', '', '예: 상한론'); if (n) { const f = st.addFolder(n); go('#/f/' + f.id); } };
 }
 
-// v2.5 국시 과목 순이면 과목이 바뀔 때마다 과목 머리글
+// v2.5.1 국시 그룹 순이면 그룹이 바뀔 때마다 그룹 머리글
 function folderTiles(fs) {
   if (!st.kuksiOn || !st.kuksiOn()) return fs.map(folderTile).join('');
   let last = -1;
@@ -298,8 +298,9 @@ function editor(sid, q = {}) {
   const f = st.S.folders[s.folderId];
   const toRow = (c) => ({ id: c.id, kind: kindOf(c), term: c.term, def: c.def, imgs: (c.imgs || []).slice(),
     choices: kindOf(c) === 'question' && !isRot(c) ? [...qChoices(c), ...blankChoices()].slice(0, Math.max(5, qChoices(c).length)) : blankChoices(), answer: kindOf(c) === 'question' && !isRot(c) ? qAnswer(c) : 1,
-    rot: isRot(c), ansText: isRot(c) ? rotAnswers(c).join('\n') : '', wrongText: isRot(c) ? (c.wrong || []).join('\n') : '', group: c.group || '' });
-  const empty = (kind = 'basic', rot = false) => ({ kind, term: '', def: '', imgs: [], choices: blankChoices(), answer: 1, rot, ansText: '', wrongText: '', group: '' });
+    rot: isRot(c), ansText: isRot(c) ? rotAnswers(c).join('\n') : '', wrongText: isRot(c) ? (c.wrong || []).join('\n') : '', group: c.group || '',
+    fx: c.fx || '', bx: c.bx || '', notes: !!(c.fx || c.bx) });
+  const empty = (kind = 'basic', rot = false) => ({ kind, term: '', def: '', imgs: [], choices: blankChoices(), answer: 1, rot, ansText: '', wrongText: '', group: '', fx: '', bx: '', notes: false });
   const lines = (t) => String(t || '').split('\n').map((x) => x.trim()).filter(Boolean);
   let rows = st.cardsOf(sid).map(toRow);
   if (!rows.length) rows = [empty(), empty(), empty()];
@@ -307,7 +308,7 @@ function editor(sid, q = {}) {
   const removed = new Set();
   let dirty = false, timer = null;
 
-  const isEmpty = (r) => !r.term.trim() && !r.def.trim() && !(r.imgs || []).length && !(r.kind === 'question' && (r.rot ? lines(r.ansText).length || lines(r.wrongText).length : r.choices.some((x) => x.trim())));
+  const isEmpty = (r) => !r.term.trim() && !r.def.trim() && !(r.imgs || []).length && !(r.kind === 'basic' && ((r.fx || '').trim() || (r.bx || '').trim())) && !(r.kind === 'question' && (r.rot ? lines(r.ansText).length || lines(r.wrongText).length : r.choices.some((x) => x.trim())));
   const kindData = (r) => (r.kind === 'question' && r.rot ? { kind: 'question', answers: lines(r.ansText), wrong: lines(r.wrongText), group: r.group }
     : r.kind === 'question' ? { kind: 'question', choices: (() => { const ch = r.choices.map((x) => x.trim()); while (ch.length > 2 && !ch[ch.length - 1] && ch.length > r.answer) ch.pop(); return ch; })(), answer: r.answer } : { kind: r.kind });
   const sig = (o) => JSON.stringify([o.kind || 'basic', o.choices || null, o.kind === 'question' && o.choices ? o.answer : null, o.answers || null, o.wrong || null, o.group || null]);
@@ -323,11 +324,14 @@ function editor(sid, q = {}) {
         if (isEmpty(r)) { st.deleteCard(r.id); r.id = null; return; }
         const sameImgs = (c.imgs || []).join(',') === imgs.join(',');
         const before = sig(c);
-        if (c.term !== term || c.def !== def || c.order !== order || !sameImgs || before !== sig({ ...kd, kind: kd.kind === 'basic' ? 'basic' : kd.kind })) {
-          c.term = term; c.def = def; c.order = order; c.imgs = imgs.slice(); st.applyKind(c, kd); c.cu = Date.now();
+        const fx = r.kind === 'basic' ? (r.fx || '').trim() : '', bx = r.kind === 'basic' ? (r.bx || '').trim() : '';
+        if (c.term !== term || c.def !== def || c.order !== order || !sameImgs || before !== sig({ ...kd, kind: kd.kind === 'basic' ? 'basic' : kd.kind }) || (c.fx || '') !== fx || (c.bx || '') !== bx) {
+          c.term = term; c.def = def; c.order = order; c.imgs = imgs.slice(); st.applyKind(c, kd);
+          if (fx) c.fx = fx; else delete c.fx; if (bx) c.bx = bx; else delete c.bx;
+          c.cu = Date.now();
         }
         order++;
-      } else if (!isEmpty(r)) { const c = st.newCard(sid, term, def, order, kd.kind === 'basic' ? null : kd); c.imgs = imgs.slice(); r.id = c.id; order++; }
+      } else if (!isEmpty(r)) { const c = st.newCard(sid, term, def, order, kd.kind === 'basic' ? null : kd); c.imgs = imgs.slice(); if (r.kind === 'basic') { if ((r.fx || '').trim()) c.fx = r.fx.trim(); if ((r.bx || '').trim()) c.bx = r.bx.trim(); } r.id = c.id; order++; }
     });
     for (const id of removed) st.deleteCard(id);
     removed.clear(); st.save(true);
@@ -362,10 +366,13 @@ function editor(sid, q = {}) {
       <div><textarea rows="3" data-k="term" placeholder="본문 (예: 미숙아는 만삭아보다 {{호흡이 빠르고}} 변화폭도 큼)">${esc(r.term)}</textarea><div class="cap" data-czinfo>${clozeInfo(r)}</div><div class="ed-prev" hidden></div></div>
       <div><textarea rows="1" data-k="def" placeholder="메모 (출처·쪽수 등, 선택)">${esc(r.def)}</textarea><div class="cap">메모</div></div></div>`;
     return `<div class="ed-body"><div><textarea rows="1" data-k="term" placeholder="용어 (A)">${esc(r.term)}</textarea><div class="cap">용어</div></div>
-    <div><textarea rows="1" data-k="def" placeholder="정의 (B)">${esc(r.def)}</textarea><div class="cap">정의</div></div></div>`;
+    <div><textarea rows="1" data-k="def" placeholder="정의 (B)">${esc(r.def)}</textarea><div class="cap">정의</div></div>
+    ${r.notes ? `<div><textarea rows="1" data-k="fx" placeholder="예: 안면 T존의 면포·구진, 염증성 농포">${esc(r.fx)}</textarea><div class="cap">앞면 설명 · 사진·용어 아래 (선택)</div></div>
+    <div><textarea rows="1" data-k="bx" placeholder="예: 주사와 감별 — 면포가 있으면 여드름">${esc(r.bx)}</textarea><div class="cap">뒷면 해설 · 정답을 본 뒤 (선택)</div></div>`
+    : `<div class="ed-notes"><button class="btn sm ghost" data-notes>＋ 앞면 설명 · 뒷면 해설</button></div>`}</div>`;
   };
   const rowHtml = (r, i, n) => `<div class="ed-row" data-i="${i}"><div class="ed-head"><span class="ed-n">${n}</span>${kindSeg(r)}<span class="spacer"></span>
-      ${r.kind === 'basic' ? `<button class="icon-btn" data-swap title="용어↔정의 바꾸기">${I.flip}</button>` : ''}<button class="icon-btn" data-del title="삭제">${I.trash}</button></div>
+      <button class="icon-btn ed-bold" data-bold title="굵게 (글자를 고른 뒤 누르기 · 다시 누르면 풀기)"><b>B</b></button>${r.kind === 'basic' ? `<button class="icon-btn" data-swap title="용어↔정의 바꾸기">${I.flip}</button>` : ''}<button class="icon-btn" data-del title="삭제">${I.trash}</button></div>
     ${bodyHtml(r, i)}
     ${r.kind === 'cloze' ? '' : `<div class="ed-ph">${phHtml(r)}</div>`}</div>`;
   const phHtml = (r) => `${(r.imgs || []).map((id, k) => `<div class="t"><img data-img="${esc(id)}" data-k="${k}" alt=""><button data-rm="${k}" title="사진 빼기">×</button></div>`).join('')}
@@ -422,8 +429,35 @@ function editor(sid, q = {}) {
     }
     r.term = ta.value; autoGrow(ta); touch();
   };
+  // v2.6 굵게: 고른 글자를 **…**로 감싸기 / 이미 굵으면 풀기
+  const toggleBold = (ta) => {
+    let a = ta.selectionStart, b = ta.selectionEnd; const v = ta.value;
+    if (a >= 2 && v.slice(a - 2, a) === '**' && v.slice(b, b + 2) === '**') { ta.value = v.slice(0, a - 2) + v.slice(a, b) + v.slice(b + 2); ta.setSelectionRange(a - 2, b - 2); return true; }
+    const sel = v.slice(a, b);
+    if (sel.length >= 4 && sel.startsWith('**') && sel.endsWith('**')) { ta.value = v.slice(0, a) + sel.slice(2, -2) + v.slice(b); ta.setSelectionRange(a, b - 4); return true; }
+    if (a === b) { // 커서가 **…** 안에 있으면 풀기
+      const ls = v.lastIndexOf('\n', a - 1) + 1, le = v.indexOf('\n', a) < 0 ? v.length : v.indexOf('\n', a);
+      const line = v.slice(ls, le), pos = a - ls; const re = /\*\*([\s\S]*?)\*\*/g; let m;
+      while ((m = re.exec(line))) if (pos >= m.index && pos <= m.index + m[0].length) { ta.value = v.slice(0, ls + m.index) + m[1] + v.slice(ls + m.index + m[0].length); ta.setSelectionRange(ls + m.index, ls + m.index + m[1].length); return true; }
+      toast('굵게 할 글자를 먼저 고르세요'); return false;
+    }
+    while (a < b && /\s/.test(v[a])) a++; while (b > a && /\s/.test(v[b - 1])) b--;
+    if (a === b) { toast('굵게 할 글자를 먼저 고르세요'); return false; }
+    ta.value = v.slice(0, a) + '**' + v.slice(a, b) + '**' + v.slice(b); ta.setSelectionRange(a + 2, b + 2); return true;
+  };
   const bindRow = (el) => {
     const i = +el.dataset.i; const r = rows[i];
+    let lastField = null;
+    $$('textarea, input[data-c]', el).forEach((x) => x.addEventListener('focus', () => (lastField = x)));
+    const bb = $('[data-bold]', el);
+    if (bb) { bb.onpointerdown = (e) => e.preventDefault(); bb.onclick = () => {
+      const ta = lastField && el.contains(lastField) ? lastField : $('textarea', el); if (!ta) return;
+      ta.focus(); if (!toggleBold(ta)) return;
+      if (ta.dataset.c !== undefined) r.choices[+ta.dataset.c] = ta.value; else r[ta.dataset.k] = ta.value;
+      if (ta.tagName === 'TEXTAREA') autoGrow(ta); touch();
+      if (r.kind === 'cloze' && ta.dataset.k === 'term') { const ci = $('[data-czinfo]', el); if (ci) ci.innerHTML = clozeInfo(r); const pv = $('.ed-prev', el); if (pv && !pv.hidden) pv.innerHTML = clozeHTML(r.term, { all: true }); }
+    }; }
+    const nb = $('[data-notes]', el); if (nb) nb.onclick = () => { r.notes = true; const n = redrawRow(el); const t = $('textarea[data-k="fx"]', n); if (t) t.focus(); };
     $$('textarea', el).forEach((ta) => {
       autoGrow(ta);
       ta.oninput = () => {
@@ -654,7 +688,7 @@ export async function importFile(input) {
     ${miss.length ? `<div class="banner warn">사진 파일 ${miss.length}개를 찾지 못했어요: ${miss.slice(0, 5).map(esc).join(', ')}${miss.length > 5 ? ' …' : ''}<br><span class="small">카드팩과 사진을 zip 하나로 묶거나, 파일을 고를 때 사진도 함께 골라 주세요. 그대로 추가하면 사진 없이 들어갑니다.</span></div>` : ''}
     ${kinds.question || kinds.cloze ? `<p class="small">형식: ${Object.entries(kinds).filter(([, n]) => n).map(([k, n]) => `${KIND_LABEL[k]} ${n}장`).join(' · ')}</p>` : ''}
     <div class="pv"><table><tr><th>폴더 › 단원</th><th>용어 · 문제 · 본문</th><th>정의 · 정답</th><th></th></tr>
-    ${rows.map((r, i) => `<tr class="${r.dup ? 'dup' : ''}" data-i="${i}"><td class="muted">${esc(r.folder)} › ${esc(r.set)}${r.kind !== 'basic' ? `<br><span class="kind-tag ${r.kind === 'question' ? 'q' : 'cz'}">${KIND_LABEL[r.kind]}</span>` : ''}${(r.imgs || []).length ? `<div class="pv-ph">${r.imgs.slice(0, 3).map((o) => `<img src="${esc(thumbURL(o))}" alt="">`).join('')}${r.imgs.length > 3 ? `<span>+${r.imgs.length - 3}</span>` : ''}</div>` : ''}${(r.imgMiss || []).length ? `<div class="small" style="color:var(--ng)">사진 없음: ${esc(r.imgMiss.join(', '))}</div>` : ''}</td>${r.kind === 'basic' ? `<td contenteditable data-k="term">${esc(r.term)}</td><td contenteditable data-k="def">${esc(r.def)}</td>` : `<td>${rich(plainA(r))}</td><td>${rich(plainB(r))}</td>`}
+    ${rows.map((r, i) => `<tr class="${r.dup ? 'dup' : ''}" data-i="${i}"><td class="muted">${esc(r.folder)} › ${esc(r.set)}${r.kind !== 'basic' ? `<br><span class="kind-tag ${r.kind === 'question' ? 'q' : 'cz'}">${KIND_LABEL[r.kind]}</span>` : ''}${(r.imgs || []).length ? `<div class="pv-ph">${r.imgs.slice(0, 3).map((o) => `<img src="${esc(thumbURL(o))}" alt="">`).join('')}${r.imgs.length > 3 ? `<span>+${r.imgs.length - 3}</span>` : ''}</div>` : ''}${(r.imgMiss || []).length ? `<div class="small" style="color:var(--ng)">사진 없음: ${esc(r.imgMiss.join(', '))}</div>` : ''}${r.kind === 'basic' && (r.fx || r.bx) ? `<div class="small">${r.fx ? '앞면 설명 ✓ ' : ''}${r.bx ? '해설 ✓' : ''}</div>` : ''}</td>${r.kind === 'basic' ? `<td contenteditable data-k="term">${esc(r.term)}</td><td contenteditable data-k="def">${esc(r.def)}</td>` : `<td>${rich(plainA(r))}</td><td>${rich(plainB(r))}</td>`}
       <td><label class="chk"><input type="checkbox" ${r.dup ? 'disabled' : r.skip ? '' : 'checked'} data-use></label></td></tr>`).join('')}</table></div>
     <div class="row end" style="margin-top:14px"><a class="btn ghost" href="#/import">취소</a><button class="btn primary" id="apply">${add}장 추가${dup ? ` (중복 ${dup}장 제외)` : ''}</button></div>`;
     $('#tgt').onchange = (e) => { T.id = e.target.value; draw(); };
@@ -907,7 +941,7 @@ async function settingsView() {
     <div class="switch"><span>국가고시 날짜</span><input class="input" type="date" id="exam" value="${esc(S.examDate)}" style="width:auto"></div>
     <div class="switch"><span>복습: 하루 새 카드 수</span><input class="input" type="number" min="0" max="999" id="npd" value="${S.newPerDay}" style="width:100px"></div>
     <div class="switch"><span>오답노트에서 빠지는 연속 정답 수</span><input class="input" type="number" min="1" max="10" id="grad" value="${S.gradStreak}" style="width:100px"></div>
-    <div class="switch"><span>폴더를 국시 과목 순으로 정렬 <span class="muted small">(내과 → 침구 → 법규 → 외과 → 신경정신 → 안이비인후 → 부인 → 소아 → 예방 → 생리 → 본초. 끄면 내가 정한 순서)</span></span><label class="toggle"><input type="checkbox" id="ksort" ${st.kuksiOn && st.kuksiOn() ? 'checked' : ''}><span></span></label></div>
+    <div class="switch"><span>폴더를 국시 교시 순으로 정렬 <span class="muted small">(1교시 간·심·비·폐·신 → 2교시 상한·사상·침구·법규 → 3교시 외과·신경정신·안이비·부인 → 4교시 소아·생리·예방·본초. 끄면 내가 정한 순서)</span></span><label class="toggle"><input type="checkbox" id="ksort" ${st.kuksiOn && st.kuksiOn() ? 'checked' : ''}><span></span></label></div>
     <div class="switch"><span>확인문제 보기 순서 섞기 <span class="muted small">(끄면 교재·국시 문제 순서 그대로)</span></span><label class="toggle"><input type="checkbox" id="qsh" ${S.qShuffle ? 'checked' : ''}><span></span></label></div>
   </div>
   <h2>화면</h2>
@@ -919,7 +953,7 @@ async function settingsView() {
   </div>
   <h2>위험 구역</h2>
   <div class="card"><button class="btn ng" id="reset">이 기기의 모든 데이터 삭제</button></div>
-  <p class="muted small" style="margin-top:24px">한의 암기노트 v2.5 · 복습 일정은 Anki의 FSRS 알고리즘(ts-fsrs, MIT)을 사용합니다.</p>`;
+  <p class="muted small" style="margin-top:24px">한의 암기노트 v2.6 · 복습 일정은 Anki의 FSRS 알고리즘(ts-fsrs, MIT)을 사용합니다.</p>`;
 
   const fname = (ext) => { const d = new Date(); const z = (n) => String(n).padStart(2, '0'); return `암기노트-백업-${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}.${ext}`; };
   $('#exp').onclick = async () => { toast('백업 파일 만드는 중…'); download(fname('json'), JSON.stringify(await st.exportBackup(), null, 1)); st.markExported(); toast('백업 파일을 저장했어요 (다운로드 폴더)'); setTimeout(settingsView, 600); };

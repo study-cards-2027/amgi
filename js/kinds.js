@@ -9,6 +9,18 @@ export const KIND_LABEL = { basic: '기본', question: '확인문제', cloze: '�
 const CIRC = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳';
 export const circ = (n) => CIRC[n - 1] || `(${n})`;
 
+// ---------- 굵게 (v2.6) ----------
+// **글자** → 굵게. 한 덩어리(글 한 토막, 표 한 칸) 안에서 짝을 맞추고, 빈칸 {{ }}을 사이에 둬도 된다(**{{도담탕}}**).
+export function boldState() {
+  let on = false;
+  return {
+    txt(t) { const ps = String(t ?? '').split('**'); let o = esc(ps[0]); for (let i = 1; i < ps.length; i++) { o += on ? '</b>' : '<b>'; on = !on; o += esc(ps[i]); } return o; },
+    close() { const o = on ? '</b>' : ''; on = false; return o; },
+  };
+}
+export const fmt = (t) => { if (!String(t ?? '').includes('**')) return esc(t); const B = boldState(); return B.txt(t) + B.close(); };
+export const unbold = (t) => String(t ?? '').replace(/\*\*/g, '');
+
 // ---------- 빈칸 ----------
 const CL = /\{\{([\s\S]*?)\}\}/g;
 // [{t, blank:false} | {t, blank:true, i}]
@@ -16,7 +28,7 @@ export function clozeParts(text) {
   const s = String(text || ''); const out = []; let last = 0, i = 0;
   for (const m of s.matchAll(CL)) {
     if (m.index > last) out.push({ t: s.slice(last, m.index), blank: false });
-    out.push({ t: m[1].trim(), blank: true, i: i++ });
+    out.push({ t: m[1].replace(/\*\*/g, '').trim(), blank: true, i: i++ }); // 정답 글자에서는 굵게 표시(**)를 뺀다
     last = m.index + m[0].length;
   }
   if (last < s.length) out.push({ t: s.slice(last), blank: false });
@@ -32,15 +44,15 @@ export function clozePlain(text, mode = 'answer') {
 // v2.4: 본문에 마크다운 표가 있으면 표로 그리고, 칸 안의 빈칸도 순서대로 번호를 매긴다.
 export function clozeHTML(text, { open = null, all = false, target = -1, tap = false, hide = null } = {}) {
   let k = 0;
-  const inl = (seg) => clozeParts(seg).map((p) => {
-    if (!p.blank) return esc(p.t);
+  const inl = (seg) => { const B = boldState(); return clozeParts(seg).map((p) => {
+    if (!p.blank) return B.txt(p.t);
     const i = k++;
     const isT = target === i;
     const isOpen = !isT && (all || (target >= 0 && !(hide && hide.has(i))) || (open && open.has(i)));
     const w = Math.min(14, Math.max(3, [...p.t].length * 0.9));
     if (isOpen) return `<span class="cz open" data-cz="${i}"><span class="n">${circ(i + 1)}</span>${esc(p.t)}</span>`;
     return `<span class="cz ${isT ? 'tgt' : ''} ${tap && !isT ? 'tap' : ''}" data-cz="${i}"><span class="n">${circ(i + 1)}</span><span class="gap" style="min-width:${w}em">${isT ? '?' : ''}</span></span>`;
-  }).join('');
+  }).join('') + B.close(); };
   return `<div class="cz-text">${richBlocks(text, inl)}</div>`;
 }
 
@@ -73,7 +85,7 @@ function tableHTML(lines, inl) {
   return `<div class="tbl-box"><div class="tbl-wrap"><table class="ct">${head ? `<thead>${row(head, 'th')}</thead>` : ''}<tbody>${body.map((r) => row(r, 'td')).join('')}</tbody></table></div><span class="tbl-zoom" role="button" tabindex="0" title="표 크게 보기" aria-label="표 크게 보기">⤢</span></div>`;
 }
 // 글 + 표를 순서대로 HTML로. inl(글조각) → HTML (빈칸 번호를 이어 매기려고 순서대로 부른다)
-export function richBlocks(text, inl = esc) {
+export function richBlocks(text, inl = fmt) {
   const s = String(text ?? '');
   if (!hasTable(s)) return inl(s);
   const lines = s.split('\n'); const out = []; let buf = [];
@@ -138,7 +150,7 @@ export function clozeHide(types, target) {
 }
 
 // 일반 글(기본 카드·확인문제·해설 등) 화면용: 표가 있으면 표로, 없으면 그대로
-export const rich = (text) => (hasTable(text) ? `<div class="rt">${richBlocks(text, esc)}</div>` : esc(text));
+export const rich = (text) => (hasTable(text) ? `<div class="rt">${richBlocks(text, fmt)}</div>` : fmt(text));
 
 // ---------- 확인문제 ----------
 // v2.2 정답 돌려쓰기: answers(정답 후보 여러 개) + wrong(오답 풀). 나올 때마다 정답 1개 + 오답 4개.
@@ -200,7 +212,8 @@ export function listHTML(c) {
       b: `${ans.map((t, i) => `${circ(i + 1)} ${esc(t)}`).join('\n')}${c.def ? `\n<span class="muted small">${esc(c.def)}</span>` : ''}`,
     };
   }
-  return { a: rich(c.term), b: rich(c.def) };
+  // v2.6 기본 카드의 앞면 설명(fx)·뒷면 해설(bx)
+  return { a: rich(c.term) + (c.fx ? `<div class="q-list">${rich(c.fx)}</div>` : ''), b: rich(c.def) + (c.bx ? `<div class="q-list">해설 · ${rich(c.bx)}</div>` : '') };
 }
 // 텍스트 비교·미리보기용
 export function plainA(c) {
@@ -208,12 +221,12 @@ export function plainA(c) {
   if (isRot(c)) return `${c.term}\n오답 풀: ${rotWrong(c).join(', ')}`;
   if (k === 'question') return `${c.term}\n${qChoices(c).map((t, i) => `${circ(i + 1)} ${t}`).join('\n')}`;
   if (k === 'cloze') return clozePlain(c.term, 'blank');
-  return c.term;
+  return c.fx ? `${c.term}\n(앞면 설명) ${c.fx}` : c.term;
 }
 export function plainB(c) {
   const k = kindOf(c);
   if (isRot(c)) return `정답(돌려쓰기): ${rotAnswers(c).join(' · ')}${c.def ? '\n' + c.def : ''}`;
   if (k === 'question') return `정답 ${qAnswerText(c)}${c.def ? '\n' + c.def : ''}`;
   if (k === 'cloze') return clozeAnswers(c.term).map((t, i) => `${circ(i + 1)} ${t}`).join('\n') + (c.def ? `\n(${c.def})` : '');
-  return c.def;
+  return c.bx ? `${c.def}\n(해설) ${c.bx}` : c.def;
 }

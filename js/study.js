@@ -13,9 +13,11 @@ const go = (h) => { if (location.hash === h) window.dispatchEvent(new HashChange
 function sides(c, dir, photo = 'one') {
   const d = dir === 'mix' ? (Math.random() < 0.5 ? 'term' : 'def') : dir;
   const imgs = photo === 'all' ? (c.imgs || []).slice() : pickOne(c.imgs);
+  // v2.6 앞면 설명(fx)은 용어·사진 쪽에 붙고, 뒷면 해설(bx)은 정답을 본 뒤에만
+  const fx = c.fx || '', ex = c.bx || '';
   return d === 'def'
-    ? { q: c.def, a: c.term, ql: '정의', al: '용어', qi: [], ai: imgs, ak: 'term' }
-    : { q: c.term, a: c.def, ql: '용어', al: '정의', qi: imgs, ai: [], ak: 'def' };
+    ? { q: c.def, a: c.term, ql: '정의', al: '용어', qi: [], ai: imgs, ak: 'term', qn: '', an: fx, ex, exl: '해설' }
+    : { q: c.term, a: c.def, ql: '용어', al: '정의', qi: imgs, ai: [], ak: 'def', qn: fx, an: '', ex, exl: '해설' };
 }
 // v2.1: 모든 형식의 카드 → 화면용 면. 확인문제·빈칸은 방향(dir)과 상관없이 문제 → 정답
 function faceOf(c, dir, photo = 'one') {
@@ -27,7 +29,11 @@ function faceOf(c, dir, photo = 'one') {
 // 문제 칸 HTML (빈칸은 cz 옵션: open/all/target/tap)
 function promptHTML(f, cz = {}, extra = '') {
   const body = f.kind === 'cloze' ? clozeHTML(f.q, cz) : rich(f.q);
-  return `<div class="q ${f.kind !== 'basic' ? 'q-' + f.kind : ''}" id="q"><div class="lab">${f.ql}${extra}</div>${photoBlock(f.qi)}<div class="txt">${body}</div></div>`;
+  return `<div class="q ${f.kind !== 'basic' ? 'q-' + f.kind : ''}" id="q"><div class="lab">${f.ql}${extra}</div>${photoBlock(f.qi)}<div class="txt">${body}</div>${noteHTML(f.qn)}</div>`;
+}
+const noteHTML = (t) => (t ? `<div class="fnote">${rich(t)}</div>` : '');
+function ansHTML(f, lab) {
+  return `<div class="ans"><div class="lab">${lab}</div>${photoBlock(f.ai)}<div class="txt">${rich(f.a)}</div>${noteHTML(f.an)}</div>${exHTML(f)}`;
 }
 const exHTML = (f) => (f.ex ? `<div class="ans ex"><div class="lab">${f.exl}</div><div class="txt">${rich(f.ex)}</div></div>` : '');
 // 직접 채점 영역: 정답 보기 전/후
@@ -49,7 +55,7 @@ function selfHTML(f, s) {
       <div style="margin-top:10px"><button class="btn primary block" style="min-height:60px;font-size:18px" data-reveal>${opened ? '나머지 모두 보기' : '모두 보기'}</button></div>`}`;
   }
   return `${promptHTML(f)}
-    ${s.revealed ? `<div class="ans"><div class="lab">정답 · ${f.al}</div>${photoBlock(f.ai)}<div class="txt">${rich(f.a)}</div></div>`
+    ${s.revealed ? ansHTML(f, `정답 · ${f.al}`)
       : `<div style="margin-top:18px"><button class="btn primary block" style="min-height:60px;font-size:18px" data-reveal>정답 보기</button></div>`}`;
 }
 function bindSelf(f, s, rerender) {
@@ -186,6 +192,9 @@ function renderFlash() {
     const ch = fixedChoices(c).map((o) => `${circ(o.no)} ${rich(o.t)}`).join('\n');
     frontH = `<div>${rich(f.q)}<div class="q-list">${ch}</div></div>`;
     backH = `<div><b>${rich(f.a)}</b>${f.ex ? `<div class="ex-txt">${rich(f.ex)}</div>` : ''}</div>`;
+  } else if (f.kind === 'basic' && (f.qn || f.an || f.ex)) {
+    frontH = `<div>${rich(f.q)}${f.qn ? `<div class="ex-txt">${rich(f.qn)}</div>` : ''}</div>`;
+    backH = `<div>${rich(f.a)}${f.an ? `<div class="ex-txt">${rich(f.an)}</div>` : ''}${f.ex ? `<div class="ex-txt"><b>해설</b>\n${rich(f.ex)}</div>` : ''}</div>`;
   } else if (f.kind === 'cloze') {
     frontH = clozeHTML(f.q, {});
     backH = `<div>${clozeHTML(f.q, { all: true })}${f.ex ? `<div class="ex-txt">${rich(f.ex)}</div>` : ''}</div>`;
@@ -401,7 +410,7 @@ function renderMatch() {
       <div class="match-grid">${s.tiles.map((t, i) => {
         const c = st.S.cards[t.id]; const txt = t.side === 'a' ? c.term : c.def;
         const im = t.side === 'a' && (c.imgs || []).length ? (t.img = t.img || pickOne(c.imgs)[0]) : null;
-        return `<div class="mt ${im ? 'mt-ph' : ''}" data-i="${i}" style="${txt.length > 60 ? 'font-size:13px' : ''}">${im ? `<img data-img="${esc(im)}" alt="">` : ''}${txt ? `<span>${esc(txt)}</span>` : ''}</div>`;
+        return `<div class="mt ${im ? 'mt-ph' : ''}" data-i="${i}" style="${txt.length > 60 ? 'font-size:13px' : ''}">${im ? `<img data-img="${esc(im)}" alt="">` : ''}${txt ? `<span>${esc(String(txt).replace(/\*\*/g, ''))}</span>` : ''}</div>`;
       }).join('')}</div>`;
     bindExit(() => { clearInterval(s.timer); session = null; history.back(); });
     hydrate(view());
@@ -531,7 +540,7 @@ function renderReview() {
   <div class="qa">
     ${isNew ? '<div class="row small" style="margin-bottom:8px"><span class="pill pr">새 카드</span></div>' : ''}
     ${mc ? mcHTML(f, mc, s.picked) : f.kind === 'cloze' ? selfHTML(f, s) : promptHTML(f)}
-    ${s.revealed ? `${!mc && f.kind === 'basic' ? `<div class="ans"><div class="lab">${f.al}</div>${photoBlock(f.ai)}<div class="txt">${rich(f.a)}</div></div>` : ''}
+    ${s.revealed ? `${!mc && f.kind === 'basic' ? ansHTML(f, f.al) : ''}
     <div class="grade4">
       <button class="btn again ${mc && !mc.ch[s.picked]?.ok ? 'sugg' : ''}" data-g="1">다시<small>${lab(1)}</small></button>
       <button class="btn hard" data-g="2">어려움<small>${lab(2)}</small></button>
@@ -664,8 +673,8 @@ function mcHTML(f, mc, picked) {
       const cls = done ? (o.ok ? 'right' : k === picked ? 'wrong' : '') : '';
       return `<button class="mc-opt ${cls}" data-k="${k}" ${done ? 'disabled' : ''}><span class="no">${f.kind === 'question' ? circ(k + 1) : k + 1}</span><span>${rich(o.t)}</span></button>`;
     }).join('')}</div>
-    ${done && f.ai.length ? `<div class="ans" style="margin-top:12px">${photoBlock(f.ai)}</div>` : ''}
-    ${done && f.kind !== 'basic' ? exHTML(f) : ''}`;
+    ${done && (f.ai.length || f.an) ? `<div class="ans" style="margin-top:12px">${photoBlock(f.ai)}${noteHTML(f.an)}</div>` : ''}
+    ${done ? exHTML(f) : ''}`;
 }
 function nextBtn(label = '다음 →') { return `<div style="margin-top:16px"><button class="btn primary block" style="min-height:56px;font-size:17px" data-next>${label}</button></div>`; }
 
@@ -679,7 +688,7 @@ function renderMC() {
   const pct = (s.i / s.order.length) * 100;
   const okN = s.answers.filter((a) => a[1]).length;
   const done = mc && s.picked !== null;
-  const stay = f.kind === 'question'; // 확인문제는 해설을 읽도록 자동으로 넘기지 않음
+  const stay = f.kind === 'question' || (f.kind === 'basic' && !!f.ex); // 확인문제는 해설을 읽도록 자동으로 넘기지 않음
   view().innerHTML = `${topbar(`${s.i + 1} / ${s.order.length}`, (s.title ? s.title + ' · ' : '') + '객관식')}
   <div class="progress"><i style="width:${pct}%"></i></div>
   <div class="qa">
@@ -731,7 +740,7 @@ function renderLearn() {
   const mc = mcFor(c, f, s, how);
   const pct = (s.mastered.length / Math.max(1, s.total)) * 100;
   const done = mc ? s.picked !== null : false;
-  const stay = f.kind === 'question';
+  const stay = f.kind === 'question' || (f.kind === 'basic' && !!f.ex);
   const again = s.missed.includes(c.id);
   view().innerHTML = `${topbar('학습하기', s.title)}
   <div class="progress"><i style="width:${pct}%;background:var(--ok)"></i></div>

@@ -522,3 +522,10 @@ table.ct .cz { line-height: 1.4; margin: 1px; }
 .grp-h { grid-column: 1 / -1; margin: 10px 2px -2px; font-weight: 800; font-size: 15px; color: var(--text); display: flex; align-items: baseline; gap: 8px; }
 .grp-h:first-child { margin-top: 0; }
 .grp-h span { font-size: 12px; font-weight: 600; color: var(--muted); }
+
+/* ---------- v2.6: 굵게 · 앞면 설명 · 뒷면 해설 ---------- */
+.fnote { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line); font-size: clamp(14px, 1.8vw, 17px); color: var(--muted); white-space: pre-wrap; font-weight: 500; line-height: 1.55; text-align: left; }
+.qa .q .fnote { flex: none; }
+.ed-notes { grid-column: 1 / -1; }
+.ed-bold b { font-size: 17px; font-weight: 900; font-family: inherit; }
+.cz-text b, .txt b, .rt b, table.ct b, .q-list b, .ex-txt b, .fnote b { font-weight: 800; }
