@@ -529,3 +529,28 @@ table.ct .cz { line-height: 1.4; margin: 1px; }
 .ed-notes { grid-column: 1 / -1; }
 .ed-bold b { font-size: 17px; font-weight: 900; font-family: inherit; }
 .cz-text b, .txt b, .rt b, table.ct b, .q-list b, .ex-txt b, .fnote b { font-weight: 800; }
+
+/* ---------- v2.6.1: 굵게 섞인 글이 칸칸이 흩어지지 않게 · 긴 기본 카드 글씨 크기 ---------- */
+.rtx { display: inline; min-width: 0; max-width: 100%; }
+.qa .txt > .rtx, .flip .face .txt > .rtx { display: block; flex: 1 1 auto; }
+.qa .q.q-long .txt { font-size: clamp(16px, 2vw, 21px); align-items: flex-start; line-height: 1.6; text-align: left; }
+.qa .q.q-long { min-height: 0; }
+
+/* ---------- v2.7: 빈칸 열고 닫기 도구 ---------- */
+.cz-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.cz-tools .btn:disabled { opacity: .4; }
+.cz.open.tap:hover { background: #ffe9a3; }
+.tv-body .cz.tap { cursor: pointer; }
+/* ---------- v2.7: ✕ 표시 ---------- */
+.pill.xpill { background: var(--ng-soft); color: var(--ng); border: 0; font-weight: 800; cursor: pointer; font: inherit; font-size: 13px; padding: 3px 10px; border-radius: 999px; }
+.pill.xpill:hover { filter: brightness(.95); }
+.term-row .acts .xpill { margin-bottom: 4px; }
+
+/* ---------- v2.7: 굵게 = 굵게 + 두꺼운 밑줄 (맑은 고딕은 굵기 한 단계뿐이라 밑줄로 더 눈에 띄게) ---------- */
+.cz-text b, .txt b, .rt b, table.ct b, .q-list b, .ex-txt b, .fnote b, .mc-opt b {
+  font-weight: 800; text-decoration: underline; text-decoration-color: var(--primary); text-decoration-thickness: 3px; text-underline-offset: 4px; text-decoration-skip-ink: none;
+}
+.ex-lab { font-weight: 800; }
+/* v2.7 합친 칸 */
+table.ct td.mg, table.ct th.mg { vertical-align: middle; }
+table.ct th.mg { text-align: center; }

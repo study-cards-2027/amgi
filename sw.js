@@ -1,5 +1,5 @@
 // 오프라인 지원: 앱 파일을 기기에 저장해 두고 캐시에서 연다. sw.js(CACHE)가 바뀌면 새 버전 파일을 통째로 받아 바꾼다
-const CACHE = 'amgi-v10';
+const CACHE = 'amgi-v12';
 const FILES = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/store.js', 'js/study.js', 'js/ui.js', 'js/media.js', 'js/kinds.js', 'js/zip.js', 'js/table.js',
   'vendor/ts-fsrs.umd.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png'];
 

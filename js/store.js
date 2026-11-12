@@ -355,6 +355,10 @@ export function noteRot(c, ans, ok) {
   touchProgress(c);
 }
 export function touchProgress(c) { c.pu = now(); if (!c.p) c.p = blankProgress(); save(); }
+// v2.7 ✕ 표시: 틀릴 때마다 1씩(테스트·객관식·학습하기·복습 「다시」). 맞혀도 저절로 지워지지 않고, 내가 지울 때만 지운다.
+export function markX(c) { if (!c) return; if (!c.p) c.p = blankProgress(); c.p.x = (c.p.x || 0) + 1; c.pu = now(); }
+export function clearX(c) { if (!c || !c.p) return; delete c.p.x; c.pu = now(); save(); }
+export const xOf = (c) => (c && c.p && c.p.x) || 0;
 
 // 세트 전체 편집 저장 (편집기에서) rows: [{id?, term, def}]
 export function saveSetCards(setId, rows) {
@@ -395,7 +399,7 @@ export function recordTest(items, scopeLabel) {
       ok++; c.p.ok++;
       if (c.p.wrong) { c.p.streak++; if (c.p.streak >= grad) { c.p.wrong = false; c.p.streak = 0; delete c.p.miss; } }
     } else {
-      c.p.ng++; c.p.wrong = true; c.p.streak = 0;
+      c.p.ng++; c.p.wrong = true; c.p.streak = 0; c.p.x = (c.p.x || 0) + 1;
       if (ans) { c.p.miss = c.p.miss || {}; c.p.miss[ans] = (c.p.miss[ans] || 0) + 1; } // 돌려쓰기 카드: 틀린 정답 처방
     }
     c.p.last = now(); c.pu = now();

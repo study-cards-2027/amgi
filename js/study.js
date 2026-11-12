@@ -29,7 +29,7 @@ function faceOf(c, dir, photo = 'one') {
 // 문제 칸 HTML (빈칸은 cz 옵션: open/all/target/tap)
 function promptHTML(f, cz = {}, extra = '') {
   const body = f.kind === 'cloze' ? clozeHTML(f.q, cz) : rich(f.q);
-  return `<div class="q ${f.kind !== 'basic' ? 'q-' + f.kind : ''}" id="q"><div class="lab">${f.ql}${extra}</div>${photoBlock(f.qi)}<div class="txt">${body}</div>${noteHTML(f.qn)}</div>`;
+  return `<div class="q ${f.kind !== 'basic' ? 'q-' + f.kind : isLong(f.q) ? 'q-long' : ''}" id="q"><div class="lab">${f.ql}${extra}</div>${photoBlock(f.qi)}<div class="txt">${body}</div>${noteHTML(f.qn)}</div>`;
 }
 const noteHTML = (t) => (t ? `<div class="fnote">${rich(t)}</div>` : '');
 function ansHTML(f, lab) {
@@ -45,29 +45,63 @@ function czPre(f, s) {
   ty.forEach((t, i) => { if (!(t === want || (want === 'dx' && t === 'rx'))) pre.add(i); });
   return pre;
 }
+// v2.7 빈칸 직접 채점: 누른 빈칸만 열고, 열린 빈칸을 다시 누르면 그 빈칸만 닫힌다. 「모두 가리기」로 한 번에 닫기.
+// 정답 확인(모두 보기·전부 열기) 뒤에도 눌러서 열고 닫을 수 있다. 표 전체 화면(⤢)의 빈칸도 같은 상태를 쓴다.
+const czAll = (f, pre) => { const out = new Set(); for (let i = 0; i < f.n; i++) if (!pre.has(i)) out.add(i); return out; };
 function selfHTML(f, s) {
   if (f.kind === 'cloze') {
     const pre = czPre(f, s);
-    const open = new Set([...(s.cz || []), ...pre]);
-    const opened = [...(s.cz || [])].filter((i) => !pre.has(i)).length;
-    return `${promptHTML(f, { open, all: s.revealed, tap: !s.revealed })}
-      ${s.revealed ? exHTML(f) : `<div class="row small muted" style="margin-top:10px;justify-content:center">빈칸을 누르면 하나씩 열려요 (${opened}/${f.n - pre.size})</div>
-      <div style="margin-top:10px"><button class="btn primary block" style="min-height:60px;font-size:18px" data-reveal>${opened ? '나머지 모두 보기' : '모두 보기'}</button></div>`}`;
+    if (s.revealed && s.czMode !== 'after') { s.cz = czAll(f, pre); s.czMode = 'after'; }
+    if (!s.revealed) s.czMode = 'before';
+    s.cz = s.cz || new Set();
+    const open = new Set([...s.cz, ...pre]);
+    const opened = [...s.cz].filter((i) => !pre.has(i)).length, total = f.n - pre.size;
+    const tools = `<div class="cz-tools"><span class="small muted" id="czc">빈칸을 누르면 열리고, 다시 누르면 닫혀요 (${opened}/${total})</span><span class="spacer"></span>
+      <button class="btn sm ghost" data-hideall ${opened ? '' : 'disabled'}>모두 가리기</button>${s.revealed ? `<button class="btn sm ghost" data-showall ${opened < total ? '' : 'disabled'}>모두 보기</button>` : ''}</div>`;
+    return `${promptHTML(f, { open, tap: true, fixed: pre })}${tools}
+      ${s.revealed ? exHTML(f) : `<div style="margin-top:10px"><button class="btn primary block" style="min-height:60px;font-size:18px" data-reveal>${opened ? '나머지 모두 보기' : '모두 보기'}</button></div>`}`;
   }
   return `${promptHTML(f)}
     ${s.revealed ? ansHTML(f, `정답 · ${f.al}`)
       : `<div style="margin-top:18px"><button class="btn primary block" style="min-height:60px;font-size:18px" data-reveal>정답 보기</button></div>`}`;
 }
+// 화면(카드 + 표 전체 화면)에 있는 i번 빈칸 모양만 바꾼다 — 다시 그리지 않아 표 가로 스크롤 위치가 유지된다
+function czPaint(f, s) {
+  const ans = clozeAnswers(f.q), pre = czPre(f, s);
+  $$('.cz.tap[data-cz]').forEach((el) => {
+    const i = +el.dataset.cz; const on = s.cz.has(i) || pre.has(i);
+    if (el.classList.contains('open') !== on) { el.classList.toggle('open', on); el.innerHTML = K.czInner ? K.czInner(ans[i] ?? '', i, on) : el.innerHTML; }
+  });
+  const opened = [...s.cz].filter((i) => !pre.has(i)).length, total = f.n - pre.size;
+  const c = $('#czc'); if (c) c.textContent = `빈칸을 누르면 열리고, 다시 누르면 닫혀요 (${opened}/${total})`;
+  const h = $('[data-hideall]'); if (h) h.disabled = !opened;
+  const sa = $('[data-showall]'); if (sa) sa.disabled = opened >= total;
+  const rb = $('[data-reveal]'); if (rb) rb.textContent = opened ? '나머지 모두 보기' : '모두 보기';
+}
+let czClick = null, czHideAll = null;
+// 빈칸 누르기는 문서 전체에서 먼저 받는다(표 전체 화면 안의 빈칸도). 카드 뒤집기·정답 보기로 넘어가지 않게 막는다.
+document.addEventListener('pointerdown', (e) => { if (czClick && e.target.closest && e.target.closest('.cz.tap')) e.stopPropagation(); }, true);
+document.addEventListener('click', (e) => {
+  const el = e.target.closest && e.target.closest('.cz.tap'); if (!el || !czClick) return;
+  e.stopPropagation(); e.preventDefault(); czClick(+el.dataset.cz);
+}, true);
+document.addEventListener('cz-hideall', () => { if (czHideAll) czHideAll(); });
 function bindSelf(f, s, rerender) {
   const reveal = () => { s.revealed = true; rerender(); };
-  if (s.revealed) return reveal;
+  czClick = null; czHideAll = null;
   const rb = $('[data-reveal]'); if (rb) rb.onclick = reveal;
   if (f.kind === 'cloze') {
-    $$('.cz.tap').forEach((el) => (el.onclick = (e) => {
-      e.stopPropagation(); s.cz = s.cz || new Set(); s.cz.add(+el.dataset.cz);
-      const pre = czPre(f, s); if ([...s.cz].filter((i) => !pre.has(i)).length >= f.n - pre.size) s.revealed = true; rerender();
-    }));
-  } else { const q = $('#q'); if (q) q.onclick = reveal; }
+    const pre = czPre(f, s); s.cz = s.cz || new Set();
+    czClick = (i) => {
+      if (pre.has(i) || i < 0 || i >= f.n) return;
+      if (s.cz.has(i)) s.cz.delete(i); else s.cz.add(i);
+      if (!s.revealed && [...s.cz].filter((k) => !pre.has(k)).length >= f.n - pre.size) { s.revealed = true; s.czMode = 'after'; rerender(); return; }
+      czPaint(f, s);
+    };
+    czHideAll = () => { s.cz = new Set(); czPaint(f, s); };
+    const h = $('[data-hideall]'); if (h) h.onclick = czHideAll;
+    const sa = $('[data-showall]'); if (sa) sa.onclick = () => { s.cz = czAll(f, pre); czPaint(f, s); };
+  } else if (!s.revealed) { const q = $('#q'); if (q) q.onclick = reveal; }
   return reveal;
 }
 // 객관식 보기: 확인문제는 고정 보기, 빈칸은 다른 빈칸 정답으로, 기본은 다른 카드로. 만들 수 없으면 null(직접 채점)
@@ -105,6 +139,12 @@ function buildGroups(s, list) {
   return total;
 }
 const ansItem = (c, mc, ok) => (mc && mc.ans ? [c.id, ok ? 1 : 0, mc.ans] : [c.id, ok ? 1 : 0]); // 빈칸 객관식은 mc.ans = 물은 빈칸의 정답
+// v2.7 ✕ 표시 알약: 누르면 지움
+const xPill = (c) => (st.xOf && st.xOf(c) ? `<button class="pill xpill" data-xclear="${c.id}" title="눌러서 ✕ 표시 지우기">✕ ${st.xOf(c)}</button>` : '');
+document.addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('[data-xclear]'); if (!b || !st.clearX) return;
+  e.stopPropagation(); e.preventDefault(); st.clearX(st.S.cards[b.dataset.xclear]); b.remove(); toast('✕ 표시를 지웠어요');
+}, true);
 const resetItem = (s) => { s.picked = null; s.revealed = false; s.cz = new Set(); };
 
 // 별점 버튼 (카드 자체 별점, 없으면 물려받은 별점을 흐리게)
@@ -126,6 +166,7 @@ const isLong = (s) => (s || '').length > 90 || (s || '').split('\n').length > 3 
 export function start(mode, cards, opts = {}) {
   let list = cards.slice();
   if (opts.filter === 'wrong') list = list.filter((c) => c.p && c.p.wrong);
+  if (opts.filter === 'x') list = list.filter((c) => c.p && c.p.x); // v2.7 ✕ 표시한 것만
   if (opts.ratings && opts.ratings.length) { const allow = new Set(opts.ratings); list = list.filter((c) => st.ratingOk(c, allow)); }
   // v2.5 묻는 빈칸: 변증만·처방만이면 그 종류 빈칸이 없는 빈칸 카드는 뺀다(다른 형식 카드는 그대로)
   if (opts.blank && opts.blank !== 'all' && mode !== 'review') {
@@ -155,6 +196,7 @@ export function start(mode, cards, opts = {}) {
 }
 
 export function render() {
+  czClick = null; czHideAll = null;
   if (!session) { go('#/'); return; }
   document.onkeydown = null;
   if (session.mode === 'flash') return renderFlash();
@@ -194,7 +236,7 @@ function renderFlash() {
     backH = `<div><b>${rich(f.a)}</b>${f.ex ? `<div class="ex-txt">${rich(f.ex)}</div>` : ''}</div>`;
   } else if (f.kind === 'basic' && (f.qn || f.an || f.ex)) {
     frontH = `<div>${rich(f.q)}${f.qn ? `<div class="ex-txt">${rich(f.qn)}</div>` : ''}</div>`;
-    backH = `<div>${rich(f.a)}${f.an ? `<div class="ex-txt">${rich(f.an)}</div>` : ''}${f.ex ? `<div class="ex-txt"><b>해설</b>\n${rich(f.ex)}</div>` : ''}</div>`;
+    backH = `<div>${rich(f.a)}${f.an ? `<div class="ex-txt">${rich(f.an)}</div>` : ''}${f.ex ? `<div class="ex-txt"><span class="ex-lab">해설</span>\n${rich(f.ex)}</div>` : ''}</div>`;
   } else if (f.kind === 'cloze') {
     frontH = clozeHTML(f.q, {});
     backH = `<div>${clozeHTML(f.q, { all: true })}${f.ex ? `<div class="ex-txt">${rich(f.ex)}</div>` : ''}</div>`;
@@ -302,7 +344,7 @@ function renderTest() {
   view().innerHTML = `${topbar(`${s.i + 1} / ${s.order.length}`, s.title)}
   <div class="progress"><i style="width:${pct}%"></i></div>
   <div class="qa">
-    <div class="row small muted" style="margin-bottom:8px"><span class="pill ok">맞음 ${okN}</span><span class="pill ng">틀림 ${s.answers.length - okN}</span>${c.p && c.p.wrong ? '<span class="pill ng">오답노트</span>' : ''}<span class="spacer"></span>
+    <div class="row small muted" style="margin-bottom:8px"><span class="pill ok">맞음 ${okN}</span><span class="pill ng">틀림 ${s.answers.length - okN}</span>${c.p && c.p.wrong ? '<span class="pill ng">오답노트</span>' : ''}${xPill(c)}<span class="spacer"></span>
       ${rateBtn(c)}</div>
     ${mc ? `${mcHTML(f, mc, s.picked)}${done ? nextBtn() : ''}`
       : `${selfHTML(f, s)}${s.revealed ? '<div class="grade-btns"><button class="btn ng" data-ng>✕ 틀렸어요</button><button class="btn ok" data-ok>○ 맞았어요</button></div>' : ''}`}
@@ -359,7 +401,7 @@ export function renderResult(hid) {
       <div>
         <div style="font-size:22px;font-weight:800">${pct >= 90 ? '훌륭해요!' : pct >= 70 ? '잘하고 있어요' : '조금 더 연습해요'}</div>
         <div class="row" style="margin:8px 0"><span class="pill ok">맞음 ${h.ok}</span><span class="pill ng">틀림 ${h.total - h.ok}</span><span class="muted small">${esc(h.scope)}</span></div>
-        <div class="muted small">틀린 문제는 오답노트에 자동으로 들어갔어요. 연속 ${st.S.settings.gradStreak}번 맞히면 빠집니다.</div>
+        <div class="muted small">틀린 문제는 오답노트에 자동으로 들어갔고, 카드에 ✕ 표시도 남아요. 연속 ${st.S.settings.gradStreak}번 맞히면 빠집니다.</div>
       </div>
     </div>
     <div class="row">
@@ -371,7 +413,7 @@ export function renderResult(hid) {
     <div class="tabs"><button data-t="ng" class="${tab === 'ng' ? 'on' : ''}">틀린 것 (${wrong.length})</button><button data-t="ok" class="${tab === 'ok' ? 'on' : ''}">맞은 것 (${right.length})</button></div>
     <div class="term-list">${list.length ? list.map(({ c, ans }) => `
       <div class="term-row ${tab === 'ng' ? 'wrong' : ''}"><div class="a">${listHTML(c).a}${(c.imgs || []).length ? `<div class="ph-row">${photoBlock(c.imgs, { compact: true })}</div>` : ''}</div><div class="b">${listHTML(c).b}${ans ? `<div class="asked">이번에 물은 정답: <b>${esc(ans)}</b></div>` : ''}</div>
-      <div class="acts">${rateBtn(c)}</div></div>`).join('')
+      <div class="acts">${xPill(c)}${rateBtn(c)}</div></div>`).join('')
       : `<div class="empty">${tab === 'ng' ? '틀린 문제가 없어요 👏' : '맞은 문제가 없어요'}</div>`}</div>`;
     bindExit(() => { session = null; go('#/'); });
     $$('[data-t]').forEach((b) => (b.onclick = () => { tab = b.dataset.t; draw(); }));
@@ -558,6 +600,7 @@ function renderReview() {
     const rec = fsrs().next(card, now, g);
     if (!c.p) c.p = st.blankProgress();
     c.p.fsrs = fromCard(rec.card);
+    if (g === 1 && st.markX) st.markX(c); // v2.7 복습 「다시」 = 틀림 → ✕ 표시
     if (isNew) st.S.local.newIntro.n++;
     st.touchProgress(c); st.bumpDay('r');
     s.queue.shift(); s.done++; s.counts[g]++; resetItem(s); delete s.choices[c.id]; delete s.faces[c.id];
@@ -692,7 +735,7 @@ function renderMC() {
   view().innerHTML = `${topbar(`${s.i + 1} / ${s.order.length}`, (s.title ? s.title + ' · ' : '') + '객관식')}
   <div class="progress"><i style="width:${pct}%"></i></div>
   <div class="qa">
-    <div class="row small muted" style="margin-bottom:8px"><span class="pill ok">맞음 ${okN}</span><span class="pill ng">틀림 ${s.answers.length - okN}</span>${c.p && c.p.wrong ? '<span class="pill ng">오답노트</span>' : ''}<span class="spacer"></span>${rateBtn(c)}</div>
+    <div class="row small muted" style="margin-bottom:8px"><span class="pill ok">맞음 ${okN}</span><span class="pill ng">틀림 ${s.answers.length - okN}</span>${c.p && c.p.wrong ? '<span class="pill ng">오답노트</span>' : ''}${xPill(c)}<span class="spacer"></span>${rateBtn(c)}</div>
     ${mc ? `${mcHTML(f, mc, s.picked)}${done && (stay || !mc.ch[s.picked].ok) ? nextBtn() : ''}`
       : `${selfHTML(f, s)}${s.revealed ? '<div class="grade-btns"><button class="btn ng" data-ng>✕ 틀렸어요</button><button class="btn ok" data-ok>○ 맞았어요</button></div>' : ''}`}
     <div class="kbd-hint">${mc ? (done ? 'Enter: 다음' : '숫자: 보기 고르기') : s.revealed ? '1 또는 ←: 틀림 · 2 또는 →: 맞음' : '스페이스: 정답 보기'}</div>
@@ -746,7 +789,7 @@ function renderLearn() {
   <div class="progress"><i style="width:${pct}%;background:var(--ok)"></i></div>
   <div class="qa">
     <div class="learn-bar"><div><b>${Math.max(0, s.total - s.mastered.length)}</b><span>남은 문제</span></div><div><b style="color:var(--ok)">${s.mastered.length}</b><span>맞힘</span></div><div><b style="color:var(--ng)">${s.wrongN || 0}</b><span>틀린 횟수</span></div></div>
-    <div class="row small muted" style="margin-bottom:8px">${again ? '<span class="pill ng">다시 나온 카드</span>' : ''}<span class="spacer"></span>${rateBtn(c)}</div>
+    <div class="row small muted" style="margin-bottom:8px">${again ? '<span class="pill ng">다시 나온 카드</span>' : ''}${xPill(c)}<span class="spacer"></span>${rateBtn(c)}</div>
     ${mc ? `${mcHTML(f, mc, s.picked)}${done && !mc.ch[s.picked].ok ? nextBtn('다음 → (이 카드는 조금 뒤에 다시 나와요)') : done && stay ? nextBtn() : ''}`
       : `${selfHTML(f, s)}${s.revealed ? '<div class="grade-btns"><button class="btn ng" data-ng>✕ 틀렸어요</button><button class="btn ok" data-ok>○ 맞았어요</button></div>' : ''}`}
     <div class="kbd-hint">${mc ? (done ? 'Enter: 다음' : '숫자: 보기 고르기') : (s.revealed ? '1 또는 ←: 틀림 · 2 또는 →: 맞음' : '스페이스: 정답 보기')}</div>
@@ -777,6 +820,7 @@ function renderLearn() {
     } else {
       if (!s.missed.includes(id)) s.missed.push(id);
       s.wrongN = (s.wrongN || 0) + 1;
+      if (st.markX) { st.markX(st.S.cards[id]); st.save(); } // v2.7 ✕ 표시
       if (ans) s.keepT[id] = ans;                         // 틀린 처방은 같은 처방으로 다시
       s.queue.splice(Math.min(s.queue.length, 3), 0, id); // 3장 뒤에 다시
       delete s.choices[id]; delete s.faces[id];           // 다시 나올 땐 보기 순서·사진·빈칸을 새로

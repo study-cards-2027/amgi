@@ -18,7 +18,8 @@ export function openTable(box) {
   const tbl = box.querySelector('table'); if (!tbl) return;
   const v = document.createElement('div');
   v.className = 'tbl-viewer'; v.setAttribute('role', 'dialog');
-  v.innerHTML = `<div class="tv-top"><button class="tv-btn" data-s="-1" aria-label="글자 작게">가−</button><button class="tv-btn" data-s="1" aria-label="글자 크게">가+</button><span class="tv-sp"></span><button class="tv-btn" data-x aria-label="닫기">✕ 닫기</button></div><div class="tv-body"></div>`;
+  const canTap = !!tbl.querySelector('.cz.tap');
+  v.innerHTML = `<div class="tv-top"><button class="tv-btn" data-s="-1" aria-label="글자 작게">가−</button><button class="tv-btn" data-s="1" aria-label="글자 크게">가+</button>${canTap ? '<button class="tv-btn" data-czhide>모두 가리기</button>' : ''}<span class="tv-sp"></span><button class="tv-btn" data-x aria-label="닫기">✕ 닫기</button></div><div class="tv-body"></div>`;
   const body = v.querySelector('.tv-body');
   const t = tbl.cloneNode(true); body.appendChild(t);
   const size = () => { t.style.fontSize = fs + 'px'; };
@@ -28,6 +29,8 @@ export function openTable(box) {
   const onKey = (e) => { if (e.key === 'Escape' || e.key === ' ' || e.key === 'Backspace') { e.preventDefault(); e.stopPropagation(); close(); } else e.stopPropagation(); };
   document.addEventListener('keydown', onKey, true);
   v.querySelector('[data-x]').onclick = close;
+  // v2.7 전체 화면에서도 빈칸 누르기(study.js가 문서 전체에서 받음)·모두 가리기 — 카드 쪽 빈칸과 같은 상태
+  const hb = v.querySelector('[data-czhide]'); if (hb) hb.onclick = () => document.dispatchEvent(new CustomEvent('cz-hideall'));
   v.querySelectorAll('[data-s]').forEach((b) => (b.onclick = () => { fs = Math.max(12, Math.min(30, fs + 2 * +b.dataset.s)); size(); }));
   ['pointerdown', 'pointerup', 'click'].forEach((ev) => v.addEventListener(ev, (e) => e.stopPropagation()));
 }

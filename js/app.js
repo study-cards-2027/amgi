@@ -79,7 +79,7 @@ function folderStats(fid) {
 }
 function folderTile(f) {
   const t = folderStats(f.id);
-  return `<a class="tile" href="#/f/${f.id}"><div class="row"><span style="color:var(--primary);display:inline-flex;width:22px">${I.folder}</span><span class="t">${esc(f.name)}</span><span class="spacer"></span>${f.rating !== undefined && f.rating !== null ? starsHTML(f.rating) : ''}${t.wrong ? `<span class="pill ng">오답 ${t.wrong}</span>` : ''}</div>
+  return `<a class="tile" href="#/f/${f.id}"><div class="row"><span style="color:var(--primary);display:inline-flex;width:22px">${I.folder}</span><span class="t">${esc(f.name)}</span><span class="spacer"></span>${f.rating !== undefined && f.rating !== null ? starsHTML(f.rating) : ''}</div>
     <div class="s">${t.subs ? `하위 폴더 ${t.subs}개 · ` : ''}단원 ${t.sets}개 · 카드 ${t.cards}장</div></a>`;
 }
 // 폴더 선택 창 (옮기기용). excludeId와 그 하위는 고를 수 없음.
@@ -170,8 +170,8 @@ function folderView(fid) {
   </div>
   ${subs.length ? `<h2>폴더</h2><div class="grid2">${subs.map(folderTile).join('')}</div>` : ''}
   ${ss.length ? `${subs.length ? '<h2>단원</h2>' : ''}<div class="list" style="margin-top:${subs.length ? 0 : 16}px">
-    ${ss.map((s) => { const cs = st.cardsOf(s.id); const a = acc(cs); const w = cs.filter((c) => c.p?.wrong).length;
-      return `<a class="tile" href="#/s/${s.id}"><div class="row"><span class="t">${esc(s.name)}</span><span class="spacer"></span>${s.rating !== undefined && s.rating !== null ? starsHTML(s.rating) : ''}${w ? `<span class="pill ng">오답 ${w}</span>` : ''}${a.pct !== null ? `<span class="pill ${a.pct >= 80 ? 'ok' : ''}">정답률 ${a.pct}%</span>` : ''}</div>
+    ${ss.map((s) => { const cs = st.cardsOf(s.id); const a = acc(cs);
+      return `<a class="tile" href="#/s/${s.id}"><div class="row"><span class="t">${esc(s.name)}</span><span class="spacer"></span>${s.rating !== undefined && s.rating !== null ? starsHTML(s.rating) : ''}${a.pct !== null ? `<span class="pill ${a.pct >= 80 ? 'ok' : ''}">정답률 ${a.pct}%</span>` : ''}</div>
       <div class="s">카드 ${cs.length}장</div></a>`; }).join('')}
   </div>` : ''}
   ${ss.length || subs.length ? '' : `<div class="empty"><div class="big">🗂️</div><p>「+ 단원」으로 1단원, 2단원 등을 만들거나<br>「하위 폴더」로 폴더를 한 단계 더 나눠 보세요.</p></div>`}`;
@@ -204,12 +204,13 @@ function folderView(fid) {
 function setView(sid, q = {}) {
   const s = st.S.sets[sid]; if (!s || s.del) return go('#/');
   const f = st.S.folders[s.folderId];
-  const filter = q.v === 'wrong' ? 'wrong' : 'all';
+  const filter = q.v === 'x' ? 'x' : 'all'; // v2.7: 오답 → ✕ 표시
   const rf = q.r ?? '';
   const all = st.cardsOf(sid);
-  let cs = filter === 'wrong' ? all.filter((c) => c.p?.wrong) : all;
+  const xn = (c) => (st.xOf ? st.xOf(c) : 0);
+  let cs = filter === 'x' ? all.filter((c) => xn(c)) : all;
   if (rf !== '') cs = cs.filter((c) => st.ratingOk(c, new Set([rf === 'none' ? 'none' : +rf])));
-  const qs = (v, r) => { const p = new URLSearchParams(); if (v === 'wrong') p.set('v', 'wrong'); if (r !== '') p.set('r', r); const t = p.toString(); return `#/s/${sid}${t ? '?' + t : ''}`; };
+  const qs = (v, r) => { const p = new URLSearchParams(); if (v === 'x') p.set('v', 'x'); if (r !== '') p.set('r', r); const t = p.toString(); return `#/s/${sid}${t ? '?' + t : ''}`; };
   const a = acc(all);
   view().innerHTML = `
   ${crumbs(f.id, true)}
@@ -224,15 +225,15 @@ function setView(sid, q = {}) {
     <button class="mode" data-m="learn">${I.flip}학습하기</button>
   </div>
   <div class="row" style="margin-top:18px">
-    <div class="seg" id="vf"><button data-v="all" class="${filter === 'all' ? 'on' : ''}">전체 ${all.length}</button><button data-v="wrong" class="${filter === 'wrong' ? 'on' : ''}">오답 ${all.filter((c) => c.p?.wrong).length}</button></div>
+    <div class="seg" id="vf"><button data-v="all" class="${filter === 'all' ? 'on' : ''}">전체 ${all.length}</button><button data-v="x" class="${filter === 'x' ? 'on' : ''}">✕ 표시 ${all.filter((c) => xn(c)).length}</button></div>
     <select class="input" id="rf" style="width:auto;min-height:40px;padding:6px 10px"><option value="">별점: 전체</option>${[5, 4, 3, 2, 1, 0].map((n) => `<option value="${n}" ${rf === String(n) ? 'selected' : ''}>★ ${n}개 (${all.filter((c) => st.effRating(c).v === n).length})</option>`).join('')}<option value="none" ${rf === 'none' ? 'selected' : ''}>별점 없음 (${all.filter((c) => st.effRating(c).v === null).length})</option></select>
     <span class="spacer"></span>
     <a class="btn sm" href="#/import?set=${sid}">${I.import} 가져오기</a>
     <a class="btn sm primary" href="#/edit/${sid}">${I.edit} 카드 편집</a>
   </div>
   <div class="term-list" style="margin-top:12px">
-    ${cs.map((c) => { const r = st.effRating(c); return `<div class="term-row ${c.p?.wrong ? 'wrong' : ''}"><div class="a">${listHTML(c).a}${(c.imgs || []).length ? `<div class="ph-row">${photoBlock(c.imgs, { compact: true })}<span class="small muted" style="align-self:center">사진 ${c.imgs.length}장</span></div>` : ''}</div><div class="b">${listHTML(c).b}</div>
-      <div class="acts"><button class="rate-btn" data-rate="${c.id}" title="별점">${starsHTML(r.v, r.inherited)}</button>
+    ${cs.map((c) => { const r = st.effRating(c); return `<div class="term-row ${xn(c) ? 'wrong' : ''}"><div class="a">${listHTML(c).a}${(c.imgs || []).length ? `<div class="ph-row">${photoBlock(c.imgs, { compact: true })}<span class="small muted" style="align-self:center">사진 ${c.imgs.length}장</span></div>` : ''}</div><div class="b">${listHTML(c).b}</div>
+      <div class="acts">${xn(c) ? `<button class="pill xpill" data-xclear="${c.id}" title="눌러서 ✕ 표시 지우기">✕ ${xn(c)}</button>` : ''}<button class="rate-btn" data-rate="${c.id}" title="별점">${starsHTML(r.v, r.inherited)}</button>
       <a class="icon-btn" href="#/edit/${sid}?focus=${c.id}" title="편집">${I.edit}</a></div></div>`; }).join('')}
   </div>
   ${all.length ? (cs.length ? '' : '<div class="empty">해당하는 카드가 없어요.</div>') : `<div class="empty"><div class="big">🃏</div><p>카드가 없어요.<br>「카드 편집」에서 직접 쓰거나, 「가져오기」로 엑셀 표를 붙여넣으세요.</p><a class="btn primary" href="#/edit/${sid}">카드 만들기</a></div>`}`;
@@ -725,7 +726,7 @@ function picker(q = {}) {
   const P = {
     mode: q.mode || last.mode || 'test',
     sel: new Set(),
-    shuffle: last.shuffle ?? true, dir: last.dir || 'term', filter: q.filter === 'wrong' ? 'wrong' : 'all', count: last.count || 0,
+    shuffle: last.shuffle ?? true, dir: last.dir || 'term', filter: q.filter === 'wrong' ? 'wrong' : q.filter === 'x' ? 'x' : 'all', count: last.count || 0,
     ratings: new Set(last.ratings || []), answer: last.answer || 'mc', blank: ['all', 'dx', 'rx'].includes(last.blank) ? last.blank : 'all',
   };
   if (!['flash', 'test', 'mc', 'learn', 'match', 'review'].includes(P.mode)) P.mode = 'test';
@@ -776,6 +777,7 @@ function picker(q = {}) {
   const filtered = () => {
     let cs = st.cardsIn([...P.sel]);
     if (P.filter === 'wrong') cs = cs.filter((c) => c.p?.wrong);
+    if (P.filter === 'x') cs = cs.filter((c) => c.p?.x);
     if (P.ratings.size) cs = cs.filter((c) => st.ratingOk(c, P.ratings));
     return cs;
   };
@@ -783,7 +785,7 @@ function picker(q = {}) {
     const cs = filtered();
     const n = P.mode === 'review' ? study.reviewCounts(cs).total : (P.count && P.count < cs.length ? P.count : cs.length);
     const modeName = { flash: '낱말카드', test: '테스트', mc: '객관식', learn: '학습하기', match: '매칭', review: '복습' }[P.mode];
-    const base = (() => { let x = st.cardsIn([...P.sel]); if (P.filter === 'wrong') x = x.filter((c) => c.p?.wrong); return x; })();
+    const base = (() => { let x = st.cardsIn([...P.sel]); if (P.filter === 'wrong') x = x.filter((c) => c.p?.wrong); if (P.filter === 'x') x = x.filter((c) => c.p?.x); return x; })();
     const rc = (k) => base.filter((c) => { const v = st.effRating(c).v; return k === 'none' ? v === null : v === k; }).length;
     view().innerHTML = `
     <h1>학습하기</h1>
@@ -803,7 +805,7 @@ function picker(q = {}) {
     <div class="card">
       ${P.mode !== 'review' ? `<div class="switch"><span>순서 섞기 (랜덤)</span><label class="toggle"><input type="checkbox" id="shuf" ${P.shuffle ? 'checked' : ''}><span></span></label></div>` : ''}
       ${P.mode !== 'match' ? `<div class="switch"><span>먼저 보여줄 면</span><div class="seg" id="dsg">${[['term', '용어'], ['def', '정의'], ...(P.mode === 'review' ? [] : [['mix', '섞기']])].map(([k, l]) => `<button data-v="${k}" class="${P.dir === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>` : ''}
-      <div class="switch"><span>대상 카드</span><div class="seg" id="fsg">${[['all', '전체'], ['wrong', '오답만']].map(([k, l]) => `<button data-v="${k}" class="${P.filter === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+      <div class="switch"><span>대상 카드</span><div class="seg" id="fsg">${[['all', '전체'], ['x', '✕ 표시만'], ...(P.filter === 'wrong' ? [['wrong', '오답노트만']] : [])].map(([k, l]) => `<button data-v="${k}" class="${P.filter === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
       <div class="switch" style="flex-wrap:wrap"><span>별점 <span class="muted small">(여러 개 선택 가능 · 안 고르면 전체)</span></span>
         <div class="row" id="rsg" style="gap:6px">${[5, 4, 3, 2, 1, 0, 'none'].map((k) => `<button class="chip chip-r ${P.ratings.has(k) ? 'on' : ''}" data-r="${k}">${k === 'none' ? '없음' : '★' + k}<span class="c">${rc(k)}</span></button>`).join('')}</div></div>
       ${P.mode === 'learn' ? `<div class="switch"><span>답하는 방식</span><div class="seg" id="asg">${[['mc', '객관식'], ['self', '직접 채점(O/X)']].map(([k, l]) => `<button data-v="${k}" class="${P.answer === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>` : ''}
@@ -953,7 +955,7 @@ async function settingsView() {
   </div>
   <h2>위험 구역</h2>
   <div class="card"><button class="btn ng" id="reset">이 기기의 모든 데이터 삭제</button></div>
-  <p class="muted small" style="margin-top:24px">한의 암기노트 v2.6 · 복습 일정은 Anki의 FSRS 알고리즘(ts-fsrs, MIT)을 사용합니다.</p>`;
+  <p class="muted small" style="margin-top:24px">한의 암기노트 v2.7 · 복습 일정은 Anki의 FSRS 알고리즘(ts-fsrs, MIT)을 사용합니다.</p>`;
 
   const fname = (ext) => { const d = new Date(); const z = (n) => String(n).padStart(2, '0'); return `암기노트-백업-${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}.${ext}`; };
   $('#exp').onclick = async () => { toast('백업 파일 만드는 중…'); download(fname('json'), JSON.stringify(await st.exportBackup(), null, 1)); st.markExported(); toast('백업 파일을 저장했어요 (다운로드 폴더)'); setTimeout(settingsView, 600); };
